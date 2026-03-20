@@ -1,0 +1,53 @@
+import { streamText } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
+import { NextRequest } from "next/server";
+import { z } from "zod";
+import { getPaperWorkspace, upsertChatHistory } from "@/lib/server-data";
+const requestSchema = z.object({
+  paperId: z.string().uuid(),
+  messages: z.array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string().min(1)
+    })
+  )
+});
+
+export async function POST(request: NextRequest) {
+  const payload = requestSchema.parse(await request.json());
+  const workspace = await getPaperWorkspace(payload.paperId);
+
+  if (!workspace) {
+    return new Response("Paper not found", { status: 404 });
+  }
+
+  const promptContext = workspace.paper.fullText;
+  const latestUserMessage = payload.messages[payload.messages.length - 1];
+
+  const result = streamText({
+    model: anthropic("claude-sonnet-4-5"),
+    system: [
+      "You answer questions about a single arXiv paper.",
+      "Use only the paper context and say when the paper does not support a claim.",
+      "Be crisp, cite sections/pages when the context includes them, and explain jargon clearly.",
+      "Paper context:",
+      promptContext
+    ].join("\n\n"),
+    messages: payload.messages.map((message) => ({
+      role: message.role,
+      content: message.content
+    })),
+    onFinish: async ({ text }) => {
+      if (!latestUserMessage) {
+        return;
+      }
+
+      await upsertChatHistory(payload.paperId, [
+        ...payload.messages,
+        { role: "assistant", content: text }
+      ]);
+    }
+  });
+
+  return result.toDataStreamResponse();
+}

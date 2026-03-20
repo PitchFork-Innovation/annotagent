@@ -1,0 +1,72 @@
+export type AnnotationType = "highlight" | "note" | "definition";
+
+export type BoundingBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type AnnotationRecord = {
+  id: string;
+  paperId: string;
+  pageNumber: number;
+  type: AnnotationType;
+  textRef: string;
+  note: string;
+  importance: 1 | 2 | 3;
+  bbox: BoundingBox;
+};
+
+export type PaperRecord = {
+  id: string;
+  arxivId: string;
+  title: string;
+  abstract: string;
+  pdfUrl: string;
+  pageCount: number;
+  fullText: string;
+  starterQuestions: string[];
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type PaperWorkspace = {
+  paper: PaperRecord;
+  annotations: AnnotationRecord[];
+  chatHistory: ChatMessage[];
+};
+
+export type PaperListItem = {
+  id: string;
+  arxivId: string;
+  title: string;
+  abstract: string;
+  annotationCount: number;
+};
+
+export type UserProfile = {
+  id: string;
+  email: string;
+};
+
+export type IngestionPayload = {
+  arxivId: string;
+  title: string;
+  abstract: string;
+  pdfUrl: string;
+  fullText: string;
+  pageCount: number;
+  starterQuestions: string[];
+  annotations: Array<{
+    page_number: number;
+    type: AnnotationType;
+    text_ref: string;
+    note: string;
+    importance: 1 | 2 | 3;
+    bbox: BoundingBox;
+  }>;
+};
