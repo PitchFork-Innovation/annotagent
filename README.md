@@ -1,7 +1,5 @@
 # ArXiv Annotation Agent
 
-Implementation of the PRD in [`arxiv_annotation_agent_PRD_v2.pdf`](/Users/kokon/work/annotagent/arxiv_annotation_agent_PRD_v2.pdf).
-
 ## What is implemented
 
 - Next.js 14 App Router frontend with:
