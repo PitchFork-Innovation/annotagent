@@ -2,15 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
+import { AuthPanel } from "@/components/auth-panel";
 import type { PaperListItem, UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
   user: UserProfile | null;
   papers: PaperListItem[];
+  hasAuthError?: boolean;
 };
 
-export function LandingShell({ user, papers }: Props) {
+export function LandingShell({ user, papers, hasAuthError = false }: Props) {
   const router = useRouter();
   const [arxivId, setArxivId] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -19,6 +21,11 @@ export function LandingShell({ user, papers }: Props) {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+
+    if (!user) {
+      setError("Sign in with your email first. Paper ingestion is only available for authenticated users.");
+      return;
+    }
 
     const response = await fetch("/api/ingest", {
       method: "POST",
@@ -66,12 +73,12 @@ export function LandingShell({ user, papers }: Props) {
                 <button
                   className={cn(
                     "h-14 rounded-2xl bg-ink px-6 text-sm font-semibold text-white transition hover:bg-ink/90",
-                    isPending && "cursor-progress opacity-70"
+                    (isPending || !user) && "cursor-progress opacity-70"
                   )}
-                  disabled={isPending}
+                  disabled={isPending || !user}
                   type="submit"
                 >
-                  {isPending ? "Opening paper..." : "Annotate paper"}
+                  {!user ? "Sign in to annotate" : isPending ? "Opening paper..." : "Annotate paper"}
                 </button>
               </form>
               {error ? <p className="text-sm text-red-700">{error}</p> : null}
@@ -83,19 +90,7 @@ export function LandingShell({ user, papers }: Props) {
             </div>
             <div className="rounded-[1.5rem] border border-black/10 bg-night p-6 text-white">
               <p className="text-sm uppercase tracking-[0.28em] text-white/45">Session</p>
-              <div className="mt-4 space-y-4">
-                <div>
-                  <h2 className="text-2xl font-semibold">{user ? user.email : "Sign in required"}</h2>
-                  <p className="mt-2 text-sm leading-6 text-white/70">
-                    The PRD requires private per-user paper libraries via Supabase Auth. Anonymous browsing is not supported for ingestion.
-                  </p>
-                </div>
-                <ul className="space-y-3 text-sm text-white/80">
-                  <li>PDF cached by arXiv ID in Supabase Storage</li>
-                  <li>Annotations persisted with page and normalized bounding boxes</li>
-                  <li>24-hour inquiry history kept in KV-compatible session storage</li>
-                </ul>
-              </div>
+              <AuthPanel hasAuthError={hasAuthError} user={user} />
             </div>
           </div>
         </section>
@@ -105,24 +100,37 @@ export function LandingShell({ user, papers }: Props) {
             <h2 className="font-serif text-3xl text-night">Your annotated library</h2>
             <span className="text-sm text-night/55">{papers.length} papers</span>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {papers.map((paper) => (
-              <button
-                key={paper.id}
-                className="rounded-[1.5rem] border border-black/10 bg-white/80 p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-float"
-                onClick={() => router.push(`/paper/${paper.id}`)}
-                type="button"
-              >
-                <p className="text-xs uppercase tracking-[0.24em] text-night/45">{paper.arxivId}</p>
-                <h3 className="mt-3 text-xl font-semibold text-night">{paper.title}</h3>
-                <p className="mt-3 line-clamp-3 text-sm leading-6 text-night/65">{paper.abstract}</p>
-                <div className="mt-6 flex items-center justify-between text-sm">
-                  <span className="text-night/50">{paper.annotationCount} annotations</span>
-                  <span className="text-ink">Open workspace</span>
-                </div>
-              </button>
-            ))}
-          </div>
+          {papers.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {papers.map((paper) => (
+                <button
+                  key={paper.id}
+                  className="rounded-[1.5rem] border border-black/10 bg-white/80 p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-float"
+                  onClick={() => router.push(`/paper/${paper.id}`)}
+                  type="button"
+                >
+                  <p className="text-xs uppercase tracking-[0.24em] text-night/45">{paper.arxivId}</p>
+                  <h3 className="mt-3 text-xl font-semibold text-night">{paper.title}</h3>
+                  <p className="mt-3 line-clamp-3 text-sm leading-6 text-night/65">{paper.abstract}</p>
+                  <div className="mt-6 flex items-center justify-between text-sm">
+                    <span className="text-night/50">{paper.annotationCount} annotations</span>
+                    <span className="text-ink">Open workspace</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[1.5rem] border border-black/10 bg-white/70 p-8 text-center shadow-sm">
+              <p className="text-lg font-semibold text-night">
+                {user ? "No papers yet." : "Sign in to start your private paper library."}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-night/60">
+                {user
+                  ? "Paste an arXiv ID above to ingest your first paper and open the annotation workspace."
+                  : "Once you use the magic link above, every ingested paper will be saved to your own account."}
+              </p>
+            </div>
+          )}
         </section>
       </div>
     </main>
