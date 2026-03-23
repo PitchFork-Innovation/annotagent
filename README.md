@@ -1,5 +1,7 @@
 # ArXiv Annotation Agent
 
+[Live deployment](https://annotagent.vercel.app/)
+
 ## What is implemented
 
 - Next.js App Router frontend with:
@@ -25,15 +27,15 @@
 
 ## Project structure
 
-- [`app`](/Users/kokon/work/annotagent/app): Next.js routes and API endpoints
-- [`components`](/Users/kokon/work/annotagent/components): viewer, workspace, and landing UI
-- [`lib`](/Users/kokon/work/annotagent/lib): environment config, Supabase/KV helpers, server data layer
-- [`python_service`](/Users/kokon/work/annotagent/python_service): FastAPI ingestion pipeline
-- [`supabase/schema.sql`](/Users/kokon/work/annotagent/supabase/schema.sql): database schema and RLS starter policies
+- [`app`](https://github.com/kokonut121/annotagent/blob/main/app): Next.js routes and API endpoints
+- [`components`](https://github.com/kokonut121/annotagent/blob/main/components): viewer, workspace, and landing UI
+- [`lib`](https://github.com/kokonut121/annotagent/blob/main/lib): environment config, Supabase/KV helpers, server data layer
+- [`python_service`](https://github.com/kokonut121/annotagent/blob/main/python_service): FastAPI ingestion pipeline
+- [`supabase/schema.sql`](https://github.com/kokonut121/annotagent/blob/main/supabase/schema.sql): database schema and RLS starter policies
 
 ## Environment
 
-Copy [`.env.example`](/Users/kokon/work/annotagent/.env.example) to `.env.local` and set:
+Copy [`.env.example`](https://github.com/kokonut121/annotagent/blob/main/.env.example) to `.env.local` and set:
 
 - Supabase URL, anon key, and service role key
 - OpenAI API key
@@ -60,7 +62,7 @@ python3 -m venv .venv
 
 Supabase:
 
-1. Run [`supabase/schema.sql`](/Users/kokon/work/annotagent/supabase/schema.sql).
+1. Run [`supabase/schema.sql`](https://github.com/kokonut121/annotagent/blob/main/supabase/schema.sql).
 2. Create a storage bucket named `papers`.
 3. Enable Supabase Auth providers required by the PRD.
 
