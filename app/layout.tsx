@@ -5,7 +5,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
-  title: "ArXiv Annotation Agent",
+  title: "Annotagent",
   description: "AI-powered research paper annotation and inquiry tool."
 };
 
