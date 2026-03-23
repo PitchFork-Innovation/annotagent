@@ -8,6 +8,38 @@ import type { AnnotationRecord, ChatMessage, IngestionPayload, PaperListItem, Pa
 
 const PYTHON_INGEST_TIMEOUT_MS = env.PYTHON_INGEST_TIMEOUT_MS;
 
+type RecentPaperRow = {
+  id: string;
+  arxiv_id: string;
+  title: string;
+  abstract: string;
+  annotations?: Array<{
+    count: number;
+  }> | null;
+};
+
+type RecentUserPaperRow = {
+  paper: RecentPaperRow | RecentPaperRow[] | null;
+};
+
+type LinkedPaperRow = {
+  paper: {
+    id: string;
+    arxiv_id: string;
+  } | null;
+};
+
+type AnnotationRow = {
+  id: string;
+  paper_id: string;
+  page_number: number;
+  type: AnnotationRecord["type"];
+  text_ref: string;
+  note: string;
+  importance: AnnotationRecord["importance"];
+  bbox: AnnotationRecord["bbox"];
+};
+
 export async function getCurrentUser(): Promise<UserProfile | null> {
   const supabase = await createSupabaseServerClient();
   const {
@@ -44,15 +76,15 @@ export async function getRecentPapers(): Promise<PaperListItem[]> {
     return [];
   }
 
-  return data
-    .map((entry: any) => entry.paper)
-    .filter(Boolean)
-    .map((paper: any) => ({
-    id: paper.id,
-    arxivId: paper.arxiv_id,
-    title: paper.title,
-    abstract: paper.abstract,
-    annotationCount: paper.annotations?.[0]?.count ?? 0
+  return (data as unknown as RecentUserPaperRow[])
+    .map((entry) => normalizeRecentPaper(entry.paper))
+    .filter((paper): paper is RecentPaperRow => Boolean(paper))
+    .map((paper) => ({
+      id: paper.id,
+      arxivId: paper.arxiv_id,
+      title: paper.title,
+      abstract: paper.abstract,
+      annotationCount: paper.annotations?.[0]?.count ?? 0
     }));
 }
 
@@ -176,7 +208,7 @@ export async function reprocessPaperAnnotations(paperId: string, userId: string)
     .eq("paper_id", paperId)
     .maybeSingle();
 
-  const paper = (linkedPaper as any)?.paper;
+  const paper = (linkedPaper as LinkedPaperRow | null)?.paper;
 
   if (!paper?.id || !paper?.arxiv_id) {
     throw new Error("Paper not found in your library.");
@@ -195,7 +227,7 @@ export async function reprocessPaperAnnotations(paperId: string, userId: string)
   };
 }
 
-function mapAnnotationRow(row: any): AnnotationRecord {
+function mapAnnotationRow(row: AnnotationRow): AnnotationRecord {
   return {
     id: row.id,
     paperId: row.paper_id,
@@ -206,6 +238,14 @@ function mapAnnotationRow(row: any): AnnotationRecord {
     importance: row.importance,
     bbox: row.bbox
   };
+}
+
+function normalizeRecentPaper(paper: RecentUserPaperRow["paper"]): RecentPaperRow | null {
+  if (Array.isArray(paper)) {
+    return paper[0] ?? null;
+  }
+
+  return paper;
 }
 
 async function fetchIngestionPayload(arxivId: string, jobId?: string): Promise<IngestionPayload> {
@@ -308,14 +348,6 @@ async function cachePaperPdf(admin: ReturnType<typeof createSupabaseAdminClient>
 
   const { data } = admin.storage.from(bucket).getPublicUrl(objectPath);
   return data.publicUrl;
-}
-function buildStarterQuestions(title: string) {
-  return [
-    `What is the main contribution of '${title}'?`,
-    "Which assumptions are most important for interpreting the results?",
-    "What terms or concepts would a non-expert need defined first?",
-    "What are the paper's biggest limitations or open questions?"
-  ];
 }
 
 async function upgradePaperFromPipeline(

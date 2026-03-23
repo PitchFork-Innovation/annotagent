@@ -2,7 +2,7 @@
 
 ## What is implemented
 
-- Next.js 14 App Router frontend with:
+- Next.js App Router frontend with:
   - arXiv ID entry workflow
   - private library landing page
   - per-paper workspace
@@ -45,6 +45,7 @@ Copy [`.env.example`](/Users/kokon/work/annotagent/.env.example) to `.env.local`
 Frontend:
 
 ```bash
+nvm use
 npm install
 npm run dev
 ```
@@ -65,10 +66,9 @@ Supabase:
 
 ## Verification notes
 
-- `npm run typecheck` passes.
 - `python3 -m py_compile python_service/main.py` passes.
 - Python service imports validate successfully.
-- `npm run build` is currently blocked by the local machine using Node `18.15.0`; Next.js 14.2.25 requires Node `>= 18.17.0`.
+- Frontend verification should be run on Node `20.x` to match the committed runtime contract used for local development and Vercel deployments.
 
 ## Important implementation note
 
