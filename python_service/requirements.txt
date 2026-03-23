@@ -1,8 +1,8 @@
-anthropic==0.49.0
 arxiv==2.2.0
 fastapi==0.115.12
 httpx==0.28.1
 langchain-text-splitters==0.3.8
+openai==2.29.0
 pydantic==2.10.6
 PyMuPDF==1.25.4
 python-dotenv==1.0.1

@@ -104,7 +104,7 @@ export function ChatPanel({
             {status === "streaming" ? (
               <div className="mr-8 flex items-center gap-3 rounded-3xl bg-white/8 px-4 py-3 text-sm text-white/70">
                 <MessageSquareText className="h-4 w-4" />
-                Claude is responding...
+                OpenAI is responding...
               </div>
             ) : null}
           </div>

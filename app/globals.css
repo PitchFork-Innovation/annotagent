@@ -35,3 +35,7 @@ a {
     linear-gradient(90deg, rgba(19, 25, 31, 0.03) 1px, transparent 1px);
   background-size: 20px 20px;
 }
+
+.react-pdf__Page__textContent {
+  pointer-events: none;
+}

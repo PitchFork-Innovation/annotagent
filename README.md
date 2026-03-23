@@ -15,7 +15,7 @@
   - PDF fetch
   - PyMuPDF text block and bbox extraction
   - paragraph-scale chunking
-  - Claude-based annotation pass with Pydantic validation
+  - OpenAI-based annotation pass with Pydantic validation
 - Supabase-oriented persistence:
   - paper records
   - annotation records
@@ -36,7 +36,7 @@
 Copy [`.env.example`](/Users/kokon/work/annotagent/.env.example) to `.env.local` and set:
 
 - Supabase URL, anon key, and service role key
-- Anthropic API key
+- OpenAI API key
 - Python service URL
 - KV REST endpoint/token if you want session chat persistence
 
@@ -72,4 +72,4 @@ Supabase:
 
 ## Important implementation note
 
-The PRD names Claude model labels like `claude-haiku-4-5` and `claude-sonnet-4-6`, but Anthropic SDK model identifiers can differ from marketing names. The code uses currently available SDK model strings and keeps the architecture aligned with the PRD: lower-cost Claude for annotation and stronger Claude for on-demand Q&A.
+The app now uses OpenAI model identifiers directly. By default it is configured for `gpt-4o-mini`, which keeps annotation and paper Q&A costs low while preserving the existing architecture.

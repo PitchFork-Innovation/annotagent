@@ -11,7 +11,12 @@ export async function createSupabaseServerClient() {
         return cookieStore.getAll();
       },
       setAll(cookieValues: { name: string; value: string; options: CookieOptions }[]) {
-        cookieValues.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        try {
+          cookieValues.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        } catch {
+          // Server Components can read cookies but cannot always mutate them.
+          // Route handlers like /auth/callback can still persist auth cookies.
+        }
       }
     }
   });

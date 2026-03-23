@@ -6,7 +6,8 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().default("demo-service-role-key"),
   SUPABASE_STORAGE_BUCKET: z.string().default("papers"),
   PYTHON_SERVICE_URL: z.string().url().default("http://localhost:8000"),
-  ANTHROPIC_API_KEY: z.string().default("demo-anthropic-key"),
+  PYTHON_INGEST_TIMEOUT_MS: z.coerce.number().int().positive().default(900000),
+  OPENAI_API_KEY: z.string().default("demo-openai-key"),
   KV_REST_API_URL: z.string().url().optional(),
   KV_REST_API_TOKEN: z.string().optional()
 });
@@ -17,7 +18,8 @@ export const env = envSchema.parse({
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET,
   PYTHON_SERVICE_URL: process.env.PYTHON_SERVICE_URL,
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  PYTHON_INGEST_TIMEOUT_MS: process.env.PYTHON_INGEST_TIMEOUT_MS,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   KV_REST_API_URL: process.env.KV_REST_API_URL,
   KV_REST_API_TOKEN: process.env.KV_REST_API_TOKEN
 });

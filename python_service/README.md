@@ -6,7 +6,7 @@ This service implements the PRD's extraction pipeline:
 - fetch the paper PDF
 - extract page text blocks and bounding boxes with PyMuPDF
 - split text into paragraph-scale chunks
-- call Claude Haiku for structured annotation JSON
+- call OpenAI `gpt-4o-mini` for structured annotation JSON
 - validate annotations with Pydantic before returning them
 
 Run locally:

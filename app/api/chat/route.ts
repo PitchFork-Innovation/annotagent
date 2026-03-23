@@ -1,8 +1,11 @@
 import { streamText } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getPaperWorkspace, upsertChatHistory } from "@/lib/server-data";
+
+const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini";
+
 const requestSchema = z.object({
   paperId: z.string().uuid(),
   messages: z.array(
@@ -25,7 +28,7 @@ export async function POST(request: NextRequest) {
   const latestUserMessage = payload.messages[payload.messages.length - 1];
 
   const result = streamText({
-    model: anthropic("claude-sonnet-4-5"),
+    model: openai(CHAT_MODEL),
     system: [
       "You answer questions about a single arXiv paper.",
       "Use only the paper context and say when the paper does not support a claim.",

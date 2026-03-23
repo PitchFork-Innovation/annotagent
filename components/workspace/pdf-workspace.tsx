@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Document, Page, pdfjs } from "react-pdf";
 import type { AnnotationRecord, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
 
 type Props = {
   workspace: PaperWorkspace;
@@ -19,8 +20,14 @@ type PopupState = {
 } | null;
 
 export function PdfWorkspace({ workspace, onToggleChat }: Props) {
+  const router = useRouter();
   const [pageCount, setPageCount] = useState<number>(0);
   const [activePopup, setActivePopup] = useState<PopupState>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
+  const [isReprocessing, setIsReprocessing] = useState(false);
+  const pdfFileUrl = `/api/papers/${workspace.paper.id}/pdf`;
+  const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   useEffect(() => {
     function onEscape(event: KeyboardEvent) {
@@ -52,6 +59,30 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
     }, {});
   }, [workspace.annotations]);
 
+  async function onReprocess() {
+    setIsReprocessing(true);
+    setReprocessMessage(null);
+
+    try {
+      const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess`, {
+        method: "POST"
+      });
+      const json = await response.json();
+
+      if (!response.ok) {
+        setReprocessMessage(json.error ?? "Unable to reprocess annotations.");
+        return;
+      }
+
+      setReprocessMessage(`Reprocessed annotations successfully. ${json.annotationCount} annotations are now stored.`);
+      router.refresh();
+    } catch (error) {
+      setReprocessMessage(error instanceof Error ? error.message : "Unable to reprocess annotations.");
+    } finally {
+      setIsReprocessing(false);
+    }
+  }
+
   return (
     <div className="px-4 py-5 md:px-8">
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -68,12 +99,44 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
           Toggle inquiry panel
         </button>
       </div>
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <button
+          className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm transition hover:bg-white"
+          disabled={isReprocessing}
+          onClick={onReprocess}
+          type="button"
+        >
+          {isReprocessing ? "Reprocessing annotations..." : "Reprocess annotations"}
+        </button>
+        {reprocessMessage ? <p className="text-sm text-night/65">{reprocessMessage}</p> : null}
+      </div>
 
       <div className="mx-auto flex max-w-5xl flex-col gap-8">
+        {pdfError ? (
+          <div className="rounded-[1.5rem] border border-red-200 bg-red-50 p-6 text-red-900 shadow-sm">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-red-700">PDF unavailable</p>
+            <p className="mt-3 text-sm leading-6">
+              {pdfError}
+            </p>
+            <a
+              className="mt-4 inline-flex rounded-2xl bg-red-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-800"
+              href={pdfFileUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Open raw PDF route
+            </a>
+          </div>
+        ) : null}
         <Document
-          file={workspace.paper.pdfUrl}
+          file={pdfFileUrl}
           loading={<PaperCard label="Loading PDF..." />}
-          onLoadSuccess={({ numPages }) => setPageCount(numPages)}
+          onLoadError={(error) => setPdfError(error.message)}
+          onSourceError={(error) => setPdfError(error.message)}
+          onLoadSuccess={({ numPages }) => {
+            setPdfError(null);
+            setPageCount(numPages);
+          }}
         >
           {Array.from({ length: pageCount || workspace.paper.pageCount || 1 }, (_, pageIndex) => {
             const pageNumber = pageIndex + 1;
@@ -85,17 +148,22 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
                   <span className="text-xs uppercase tracking-[0.25em] text-night/40">Page {pageNumber}</span>
                   <span className="text-xs text-night/50">{pageAnnotations.length} annotations</span>
                 </div>
-                <div className="relative mx-auto w-fit">
+                <div
+                  ref={(node) => {
+                    pageRefs.current[pageNumber] = node;
+                  }}
+                  className="relative mx-auto w-fit"
+                >
                   <Page pageNumber={pageNumber} renderAnnotationLayer={false} renderTextLayer={true} />
-                  <div className="pointer-events-none absolute inset-0">
-                    {pageAnnotations.map((annotation) => (
-                      <AnnotationUnderline
-                        key={annotation.id}
-                        annotation={annotation}
-                        onOpen={(coords) => setActivePopup({ annotation, ...coords })}
-                      />
-                    ))}
-                  </div>
+                  <AnnotationOverlay
+                    annotations={pageAnnotations}
+                    pageRootRef={{
+                      get current() {
+                        return pageRefs.current[pageNumber] ?? null;
+                      }
+                    }}
+                    onOpen={(annotation, coords) => setActivePopup({ annotation, ...coords })}
+                  />
                   {activePopup?.annotation.pageNumber === pageNumber ? (
                     <AnnotationPopup popup={activePopup} onClose={() => setActivePopup(null)} />
                   ) : null}
@@ -109,6 +177,61 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   );
 }
 
+function AnnotationOverlay({
+  annotations,
+  pageRootRef,
+  onOpen
+}: {
+  annotations: AnnotationRecord[];
+  pageRootRef: RefObject<HTMLDivElement | null>;
+  onOpen: (annotation: AnnotationRecord, coords: { x: number; y: number }) => void;
+}) {
+  const [layouts, setLayouts] = useState<Record<string, ResolvedAnnotationLayout>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const updateLayouts = () => {
+      if (cancelled) {
+        return;
+      }
+
+      const pageRoot = pageRootRef.current;
+      if (!pageRoot) {
+        return;
+      }
+
+      const nextLayouts = Object.fromEntries(
+        annotations.map((annotation) => [annotation.id, resolveAnnotationLayout(annotation, pageRoot)])
+      );
+
+      setLayouts(nextLayouts);
+    };
+
+    const rafId = window.requestAnimationFrame(updateLayouts);
+    window.addEventListener("resize", updateLayouts);
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", updateLayouts);
+    };
+  }, [annotations, pageRootRef]);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10">
+      {annotations.map((annotation) => (
+        <AnnotationUnderline
+          key={annotation.id}
+          annotation={annotation}
+          layout={layouts[annotation.id]}
+          onOpen={(coords) => onOpen(annotation, coords)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function PaperCard({ label }: { label: string }) {
   return (
     <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] bg-white text-night/50">
@@ -117,28 +240,34 @@ function PaperCard({ label }: { label: string }) {
   );
 }
 
+type ResolvedAnnotationLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 function AnnotationUnderline({
   annotation,
+  layout,
   onOpen
 }: {
   annotation: AnnotationRecord;
+  layout?: ResolvedAnnotationLayout;
   onOpen: (coords: { x: number; y: number }) => void;
 }) {
   const tone = annotationTone(annotation.type);
   const style = importanceStyle(annotation.importance);
-  const { x, y, width, height } = annotation.bbox;
-
-  const path = `M 2 ${height - 4} Q ${width * 0.2} ${height - 1}, ${width * 0.35} ${height - 4} T ${width *
-    0.7} ${height - 5} T ${Math.max(width - 2, 3)} ${height - 4}`;
+  const { x, y, width, height } = layout ?? annotation.bbox;
 
   return (
     <button
-      className="pointer-events-auto absolute"
+      className="pointer-events-auto absolute z-10 cursor-pointer"
       style={{
         left: `${x * 100}%`,
-        top: `${y * 100}%`,
+        top: `${(y + Math.max(height - 0.01, 0)) * 100}%`,
         width: `${width * 100}%`,
-        height: `${height * 100}%`
+        height: `${Math.max(height * 100, 1.6)}%`
       }}
       title={annotation.note}
       type="button"
@@ -150,17 +279,14 @@ function AnnotationUnderline({
         });
       }}
     >
-      <svg className="h-full w-full overflow-visible" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`}>
-        <path
-          d={path}
-          fill="none"
-          stroke={tone}
-          strokeLinecap="round"
-          strokeOpacity={style.opacity}
-          strokeWidth={style.strokeWidth}
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
+      <span
+        className="absolute inset-x-0 bottom-0 block rounded-full"
+        style={{
+          borderBottom: `${style.strokeWidth}px solid ${tone}`,
+          opacity: style.opacity
+        }}
+      />
+      <span className="absolute inset-x-0 bottom-0 top-[-8px]" />
       <span className="sr-only">{annotation.type}</span>
     </button>
   );
@@ -198,4 +324,101 @@ function AnnotationPopup({
       </button>
     </aside>
   );
+}
+
+function resolveAnnotationLayout(annotation: AnnotationRecord, pageRoot: HTMLDivElement): ResolvedAnnotationLayout {
+  const textLayer = pageRoot.querySelector(".react-pdf__Page__textContent");
+  if (!textLayer) {
+    return annotation.bbox;
+  }
+
+  const matchedRect = matchTextLayerRect(annotation.textRef, textLayer, pageRoot);
+  return matchedRect ?? annotation.bbox;
+}
+
+function matchTextLayerRect(query: string, textLayer: Element, pageRoot: HTMLDivElement): ResolvedAnnotationLayout | null {
+  const normalizedQuery = normalizeText(query);
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  const queryWords = normalizedQuery.split(" ").filter((word) => word.length > 3).slice(0, 5);
+  const spans = Array.from(textLayer.querySelectorAll("span")).map((span) => ({
+    element: span,
+    text: normalizeText(span.textContent ?? "")
+  }));
+
+  const rootRect = pageRoot.getBoundingClientRect();
+
+  for (let index = 0; index < spans.length; index += 1) {
+    const span = spans[index];
+    if (!span.text) {
+      continue;
+    }
+
+    const wordMatch = queryWords.some((word) => span.text.includes(word) || word.includes(span.text));
+    if (!wordMatch) {
+      continue;
+    }
+
+    const matchedElements = [span.element];
+    let combinedText = span.text;
+    const baseTop = span.element.getBoundingClientRect().top;
+
+    for (let nextIndex = index + 1; nextIndex < spans.length && matchedElements.length < 8; nextIndex += 1) {
+      const nextSpan = spans[nextIndex];
+      if (!nextSpan.text) {
+        continue;
+      }
+
+      const nextRect = nextSpan.element.getBoundingClientRect();
+      if (Math.abs(nextRect.top - baseTop) > 12) {
+        break;
+      }
+
+      matchedElements.push(nextSpan.element);
+      combinedText = `${combinedText} ${nextSpan.text}`.trim();
+
+      if (combinedText.includes(normalizedQuery.slice(0, Math.min(normalizedQuery.length, 72)))) {
+        break;
+      }
+    }
+
+    const unionRect = buildUnionRect(matchedElements, rootRect);
+    if (unionRect) {
+      return unionRect;
+    }
+  }
+
+  return null;
+}
+
+function buildUnionRect(elements: Element[], rootRect: DOMRect): ResolvedAnnotationLayout | null {
+  const rects = elements
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+
+  if (rects.length === 0 || rootRect.width === 0 || rootRect.height === 0) {
+    return null;
+  }
+
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+
+  return {
+    x: (left - rootRect.left) / rootRect.width,
+    y: (top - rootRect.top) / rootRect.height,
+    width: (right - left) / rootRect.width,
+    height: (bottom - top) / rootRect.height
+  };
+}
+
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

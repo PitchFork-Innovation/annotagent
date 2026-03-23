@@ -12,39 +12,78 @@ type Props = {
   hasAuthError?: boolean;
 };
 
+type IngestProgress = {
+  status?: "pending" | "running" | "completed" | "failed";
+  stage?: string;
+  message?: string;
+  currentChunk?: number;
+  totalChunks?: number;
+};
+
 export function LandingShell({ user, papers, hasAuthError = false }: Props) {
   const router = useRouter();
   const [arxivId, setArxivId] = useState("");
   const [isPending, startTransition] = useTransition();
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<IngestProgress | null>(null);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setProgress(null);
 
     if (!user) {
       setError("Sign in with your email first. Paper ingestion is only available for authenticated users.");
       return;
     }
 
-    const response = await fetch("/api/ingest", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ arxivId })
-    });
-    const json = await response.json();
+    setIsSubmitting(true);
+    const jobId = crypto.randomUUID();
+    const progressInterval = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/ingest/progress?jobId=${jobId}`, {
+          cache: "no-store"
+        });
+        const json = await response.json();
+        setProgress(json);
+      } catch {
+        // Keep the current progress UI as-is if polling fails temporarily.
+      }
+    }, 1000);
 
-    if (!response.ok) {
-      setError(json.error ?? "Unable to annotate that paper.");
-      return;
+    try {
+      const response = await fetch("/api/ingest", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ arxivId, jobId })
+      });
+      const json = await response.json();
+
+      if (!response.ok) {
+        setError(json.error ?? "Unable to annotate that paper.");
+        return;
+      }
+
+      startTransition(() => {
+        router.push(`/paper/${json.paper.id}`);
+      });
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to annotate that paper.");
+    } finally {
+      window.clearInterval(progressInterval);
+      setIsSubmitting(false);
     }
-
-    startTransition(() => {
-      router.push(`/paper/${json.paper.id}`);
-    });
   }
+
+  const progressValue =
+    progress?.totalChunks && progress.totalChunks > 0 && progress.currentChunk
+      ? Math.min((progress.currentChunk / progress.totalChunks) * 100, 100)
+      : progress?.status === "completed"
+        ? 100
+        : 8;
 
   return (
     <main className="paper-grid min-h-screen px-6 py-8 text-night md:px-10">
@@ -60,7 +99,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                   Read machine learning papers with inline underlines, margin notes, and a paper-aware chat copilot.
                 </h1>
                 <p className="max-w-2xl text-lg leading-8 text-night/70">
-                  Paste an arXiv ID, fetch the PDF, generate structured annotations with Claude, and explore the paper through a NotebookLM-style inquiry panel.
+                  Paste an arXiv ID, fetch the PDF, generate structured annotations with OpenAI, and explore the paper through a NotebookLM-style inquiry panel.
                 </p>
               </div>
               <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onSubmit}>
@@ -73,14 +112,39 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                 <button
                   className={cn(
                     "h-14 rounded-2xl bg-ink px-6 text-sm font-semibold text-white transition hover:bg-ink/90",
-                    (isPending || !user) && "cursor-progress opacity-70"
+                    (isPending || isSubmitting || !user) && "cursor-progress opacity-70"
                   )}
-                  disabled={isPending || !user}
+                  disabled={isPending || isSubmitting || !user}
                   type="submit"
                 >
-                  {!user ? "Sign in to annotate" : isPending ? "Opening paper..." : "Annotate paper"}
+                  {!user
+                    ? "Sign in to annotate"
+                    : isSubmitting
+                      ? "Generating annotations..."
+                      : isPending
+                        ? "Opening paper..."
+                        : "Annotate paper"}
                 </button>
               </form>
+              {isSubmitting ? (
+                <div className="space-y-3">
+                  <div className="overflow-hidden rounded-full bg-black/10">
+                    <div
+                      className="h-2 rounded-full bg-ink transition-[width] duration-700"
+                      style={{ width: `${progressValue}%` }}
+                    />
+                  </div>
+                  <p className="text-sm text-night/60">
+                    {progress?.message ??
+                      "Fetching the PDF, extracting text, and asking OpenAI for annotations. This can take a few minutes for a fresh paper."}
+                  </p>
+                  {progress?.currentChunk && progress?.totalChunks ? (
+                    <p className="text-xs uppercase tracking-[0.18em] text-night/45">
+                      Chunk {progress.currentChunk} of {progress.totalChunks}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               {error ? <p className="text-sm text-red-700">{error}</p> : null}
               <div className="flex flex-wrap gap-3 text-sm text-night/60">
                 <span className="rounded-full bg-coral/10 px-3 py-1.5 text-coral">Key results</span>

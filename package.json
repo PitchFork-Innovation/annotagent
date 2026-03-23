@@ -11,8 +11,7 @@
     "python:dev": ".venv/bin/python python_service/main.py"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.2.11",
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@ai-sdk/openai": "^1.3.24",
     "@radix-ui/react-dialog": "^1.1.6",
     "@radix-ui/react-scroll-area": "^1.2.3",
     "@supabase/ssr": "^0.5.2",
@@ -22,6 +21,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.511.0",
     "next": "14.2.25",
+    "openai": "^6.32.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-pdf": "^9.2.1",

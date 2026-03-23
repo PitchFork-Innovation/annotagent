@@ -4,7 +4,8 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { ensurePaperIngested } from "@/lib/server-data";
 
 const bodySchema = z.object({
-  arxivId: z.string().min(4)
+  arxivId: z.string().min(4),
+  jobId: z.string().uuid().optional()
 });
 
 export async function POST(request: NextRequest) {
@@ -13,6 +14,9 @@ export async function POST(request: NextRequest) {
   if (!payload.success) {
     return NextResponse.json({ error: "Invalid arXiv ID." }, { status: 400 });
   }
+
+  const arxivId = payload.data.arxivId.trim();
+  const jobId = payload.data.jobId;
 
   const supabase = await createSupabaseServerClient();
   const {
@@ -24,7 +28,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const paper = await ensurePaperIngested(payload.data.arxivId, user.id);
+    const paper = await ensurePaperIngested(arxivId, user.id, jobId);
     return NextResponse.json({ paper });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Paper ingestion failed.";
