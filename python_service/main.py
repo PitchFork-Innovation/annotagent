@@ -171,7 +171,7 @@ A strong annotation should help the reader do at least one of these:
 TARGET READER
 Assume the reader:
 - can follow technical prose
-- knows general scientific / ML / academic concepts
+- knows general scientific and academic concepts
 - does NOT automatically know niche jargon, specialized methods, datasets, or subfield-specific terminology
 
 BE SELECTIVE
@@ -222,6 +222,8 @@ IMPORTANCE RUBRIC
 
 STRICT text_ref RULES
 "text_ref" must be the SHORTEST EXACT QUOTE from the passage that supports the annotation.
+For definitions, it must only be the exact term being defined and strictly less than 5 words.
+For notes and highlights, it must be the exact phrase or sentence that needs explanation and strictly less than 15 words unless deemed absolutely necessary.
 
 This is critical:
 - Do NOT quote whole sentences if only a phrase is needed.
