@@ -14,12 +14,12 @@ export function annotationTone(type: AnnotationType) {
 
 export function importanceStyle(importance: 1 | 2 | 3) {
   if (importance === 3) {
-    return { strokeWidth: 2.9, opacity: 0.95 };
+    return { fillOpacity: 0.3, borderOpacity: 0.48 };
   }
 
   if (importance === 2) {
-    return { strokeWidth: 2.2, opacity: 0.75 };
+    return { fillOpacity: 0.22, borderOpacity: 0.36 };
   }
 
-  return { strokeWidth: 1.6, opacity: 0.5 };
+  return { fillOpacity: 0.16, borderOpacity: 0.24 };
 }

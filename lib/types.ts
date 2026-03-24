@@ -23,6 +23,7 @@ export type PaperRecord = {
   arxivId: string;
   title: string;
   abstract: string;
+  aiSummary: string | null;
   pdfUrl: string;
   pageCount: number;
   fullText: string;
@@ -57,6 +58,7 @@ export type IngestionPayload = {
   arxivId: string;
   title: string;
   abstract: string;
+  summary: string;
   pdfUrl: string;
   fullText: string;
   pageCount: number;

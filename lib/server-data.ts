@@ -7,6 +7,7 @@ import { createSupabaseServerClient } from "./supabase/server";
 import type { AnnotationRecord, ChatMessage, IngestionPayload, PaperListItem, PaperWorkspace, UserProfile } from "./types";
 
 const PYTHON_INGEST_TIMEOUT_MS = env.PYTHON_INGEST_TIMEOUT_MS;
+let aiSummaryColumnAvailable: boolean | null = null;
 
 type RecentPaperRow = {
   id: string;
@@ -38,6 +39,18 @@ type AnnotationRow = {
   note: string;
   importance: AnnotationRecord["importance"];
   bbox: AnnotationRecord["bbox"];
+};
+
+type WorkspacePaperRow = {
+  id: string;
+  arxiv_id: string;
+  title: string;
+  abstract: string;
+  ai_summary: string | null;
+  pdf_url: string;
+  page_count: number;
+  full_text: string;
+  starter_questions: string[] | null;
 };
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
@@ -90,12 +103,8 @@ export async function getRecentPapers(): Promise<PaperListItem[]> {
 
 export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace | null> {
   const supabase = await createSupabaseServerClient();
-  const [{ data: paper }, { data: annotations }] = await Promise.all([
-    supabase
-      .from("papers")
-      .select("id, arxiv_id, title, abstract, pdf_url, page_count, full_text, starter_questions")
-      .eq("id", paperId)
-      .single(),
+  const [paper, annotationsResult] = await Promise.all([
+    fetchPaperWorkspaceRow(supabase, paperId),
     supabase
       .from("annotations")
       .select("id, paper_id, page_number, type, text_ref, note, importance, bbox")
@@ -108,6 +117,7 @@ export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace
   }
 
   const chatHistory = await getChatHistory(paperId);
+  const resolvedSummary = await ensurePaperSummary(paper as WorkspacePaperRow);
 
   return {
     paper: {
@@ -115,12 +125,13 @@ export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace
       arxivId: paper.arxiv_id,
       title: paper.title,
       abstract: paper.abstract,
+      aiSummary: resolvedSummary ?? paper.ai_summary ?? paper.abstract,
       pdfUrl: paper.pdf_url,
       pageCount: paper.page_count,
       fullText: paper.full_text,
       starterQuestions: paper.starter_questions ?? []
     },
-    annotations: (annotations ?? []).map(mapAnnotationRow),
+    annotations: (annotationsResult.data ?? []).map(mapAnnotationRow),
     chatHistory
   };
 }
@@ -143,19 +154,7 @@ export async function ensurePaperIngested(arxivId: string, userId: string, jobId
   const payload = await fetchIngestionPayload(normalizedArxivId, jobId);
   const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
 
-  const { data: createdPaper, error: paperError } = await admin
-    .from("papers")
-    .insert({
-      arxiv_id: payload.arxivId,
-      title: payload.title,
-      abstract: payload.abstract,
-      pdf_url: cachedPdfUrl,
-      page_count: payload.pageCount,
-      full_text: payload.fullText,
-      starter_questions: payload.starterQuestions
-    })
-    .select("id")
-    .single();
+  const { data: createdPaper, error: paperError } = await insertPaperRow(admin, payload, cachedPdfUrl);
 
   if (paperError?.code === "23505") {
     const { data: duplicatePaper } = await admin.from("papers").select("id").eq("arxiv_id", payload.arxivId).single();
@@ -359,17 +358,7 @@ async function upgradePaperFromPipeline(
   const payload = await fetchIngestionPayload(arxivId, jobId);
   const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
 
-  const { error: paperError } = await admin
-    .from("papers")
-    .update({
-      title: payload.title,
-      abstract: payload.abstract,
-      pdf_url: cachedPdfUrl,
-      page_count: payload.pageCount,
-      full_text: payload.fullText,
-      starter_questions: payload.starterQuestions
-    })
-    .eq("id", paperId);
+  const { error: paperError } = await updatePaperRow(admin, paperId, payload, cachedPdfUrl);
 
   if (paperError) {
     throw new Error(paperError.message);
@@ -400,4 +389,183 @@ async function upgradePaperFromPipeline(
   if (insertError) {
     throw new Error(insertError.message);
   }
+}
+
+async function ensurePaperSummary(paper: WorkspacePaperRow): Promise<string | null> {
+  if (aiSummaryColumnAvailable === false) {
+    return null;
+  }
+
+  const existingSummary = normalizeSummaryText(paper.ai_summary);
+  if (existingSummary) {
+    return existingSummary;
+  }
+
+  try {
+    const generatedSummary = await fetchPaperSummary(paper.title, paper.abstract, paper.full_text);
+    if (!generatedSummary) {
+      return null;
+    }
+
+    const admin = createSupabaseAdminClient();
+    const { error } = await updatePaperSummary(admin, paper.id, generatedSummary);
+
+    if (error) {
+      return generatedSummary;
+    }
+
+    return generatedSummary;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPaperSummary(title: string, abstract: string, fullText: string): Promise<string | null> {
+  const url = new URL("/summarize", env.PYTHON_SERVICE_URL);
+  const payload = JSON.stringify({
+    title,
+    abstract,
+    fullText
+  });
+  const response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS);
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error("Python summary service failed.");
+  }
+
+  const parsed = JSON.parse(response.body) as { summary?: string };
+  return normalizeSummaryText(parsed.summary);
+}
+
+function normalizeSummaryText(summary: string | null | undefined) {
+  if (!summary) {
+    return null;
+  }
+
+  const normalized = summary.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function fetchPaperWorkspaceRow(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  paperId: string
+): Promise<WorkspacePaperRow | null> {
+  const includeSummary = aiSummaryColumnAvailable !== false;
+  const selectedColumns = getPaperWorkspaceSelect(includeSummary);
+  let response = await supabase.from("papers").select(selectedColumns).eq("id", paperId).maybeSingle();
+
+  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
+    aiSummaryColumnAvailable = false;
+    response = await supabase.from("papers").select(getPaperWorkspaceSelect(false)).eq("id", paperId).maybeSingle();
+  } else if (!response.error && includeSummary) {
+    aiSummaryColumnAvailable = true;
+  }
+
+  if (response.error || !response.data) {
+    return null;
+  }
+
+  const paperRow = response.data as unknown as Record<string, unknown>;
+  return {
+    ...paperRow,
+    ai_summary: includeSummary && "ai_summary" in paperRow ? (paperRow.ai_summary as string | null | undefined) ?? null : null
+  } as WorkspacePaperRow;
+}
+
+function getPaperWorkspaceSelect(includeSummary: boolean) {
+  const base = "id, arxiv_id, title, abstract, pdf_url, page_count, full_text, starter_questions";
+  return includeSummary ? `${base}, ai_summary` : base;
+}
+
+async function insertPaperRow(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  payload: IngestionPayload,
+  cachedPdfUrl: string
+) {
+  const includeSummary = aiSummaryColumnAvailable !== false;
+  let response = await admin
+    .from("papers")
+    .insert(buildPaperMutationPayload(payload, cachedPdfUrl, includeSummary))
+    .select("id")
+    .single();
+
+  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
+    aiSummaryColumnAvailable = false;
+    response = await admin
+      .from("papers")
+      .insert(buildPaperMutationPayload(payload, cachedPdfUrl, false))
+      .select("id")
+      .single();
+  } else if (!response.error && includeSummary) {
+    aiSummaryColumnAvailable = true;
+  }
+
+  return response;
+}
+
+async function updatePaperRow(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  paperId: string,
+  payload: IngestionPayload,
+  cachedPdfUrl: string
+) {
+  const includeSummary = aiSummaryColumnAvailable !== false;
+  let response = await admin
+    .from("papers")
+    .update(buildPaperMutationPayload(payload, cachedPdfUrl, includeSummary))
+    .eq("id", paperId);
+
+  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
+    aiSummaryColumnAvailable = false;
+    response = await admin.from("papers").update(buildPaperMutationPayload(payload, cachedPdfUrl, false)).eq("id", paperId);
+  } else if (!response.error && includeSummary) {
+    aiSummaryColumnAvailable = true;
+  }
+
+  return response;
+}
+
+async function updatePaperSummary(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  paperId: string,
+  summary: string
+) {
+  const includeSummary = aiSummaryColumnAvailable !== false;
+  if (!includeSummary) {
+    return { error: null };
+  }
+
+  const response = await admin.from("papers").update({ ai_summary: summary }).eq("id", paperId);
+
+  if (response.error && isMissingAiSummaryColumnError(response.error)) {
+    aiSummaryColumnAvailable = false;
+    return { error: null };
+  }
+
+  aiSummaryColumnAvailable = true;
+  return response;
+}
+
+function buildPaperMutationPayload(payload: IngestionPayload, cachedPdfUrl: string, includeSummary: boolean) {
+  const basePayload = {
+    arxiv_id: payload.arxivId,
+    title: payload.title,
+    abstract: payload.abstract,
+    pdf_url: cachedPdfUrl,
+    page_count: payload.pageCount,
+    full_text: payload.fullText,
+    starter_questions: payload.starterQuestions
+  };
+
+  return includeSummary
+    ? {
+        ...basePayload,
+        ai_summary: payload.summary || payload.abstract
+      }
+    : basePayload;
+}
+
+function isMissingAiSummaryColumnError(error: { message?: string; details?: string | null }) {
+  const haystack = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+  return haystack.includes("ai_summary") && (haystack.includes("schema cache") || haystack.includes("column"));
 }

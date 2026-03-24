@@ -5,6 +5,7 @@ create table if not exists papers (
   arxiv_id text not null unique,
   title text not null,
   abstract text not null default '',
+  ai_summary text,
   pdf_url text not null,
   page_count integer not null default 0,
   full_text text not null,
@@ -23,6 +24,8 @@ create table if not exists annotations (
   bbox jsonb not null,
   created_at timestamptz not null default now()
 );
+
+alter table papers add column if not exists ai_summary text;
 
 create table if not exists user_papers (
   user_id uuid not null references auth.users(id) on delete cascade,

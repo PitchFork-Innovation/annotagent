@@ -37,6 +37,12 @@ ANNOTATION_MODELS = [
     for model in os.getenv("OPENAI_ANNOTATION_MODELS", DEFAULT_ANNOTATION_MODELS).split(",")
     if model.strip()
 ]
+DEFAULT_SUMMARY_MODELS = DEFAULT_ANNOTATION_MODELS
+SUMMARY_MODELS = [
+    model.strip()
+    for model in os.getenv("OPENAI_SUMMARY_MODELS", DEFAULT_SUMMARY_MODELS).split(",")
+    if model.strip()
+]
 ANNOTATION_REQUEST_TIMEOUT = float(os.getenv("OPENAI_ANNOTATION_TIMEOUT_SECONDS", "45"))
 
 
@@ -63,6 +69,7 @@ Annotation types:
 - definition:
   Use for specialized technical terms, datasets, benchmarks, acronyms, or methods that a non-expert likely would not know.
   Define the term briefly in the context of this passage.
+  For definitions, "text_ref" must contain only the exact word or short phrase being defined, never surrounding context.
 
 Importance scale:
 - 3 = critical to understanding the passage; core claim, main result, essential method, or essential term
@@ -75,12 +82,14 @@ Rules:
 - Do NOT restate obvious text in the note.
 - Do NOT define common academic vocabulary that a technical reader would already know.
 - Do NOT create duplicate or overlapping annotations unless they serve clearly different purposes.
+- No two annotations may reference the same normalized "text_ref" on the same page.
 - Ground every annotation in the input passage only.
 - "text_ref" must be the shortest exact quote from the passage that supports the annotation.
 - "note" must be concise, specific, and helpful.
 - For highlights, explain significance rather than repeating the claim.
 - For notes, explain what is non-obvious, why it matters, or what follows from it.
 - For definitions, define the term in plain but technically accurate language.
+- For definitions, highlight only the defined term itself. Do not include adjacent verbs, punctuation, or explanatory clauses in "text_ref".
 - If a passage has little annotatable content, return a small number of annotations or an empty array.
 
 Quality bar:
@@ -92,12 +101,36 @@ Return ONLY the JSON array. No prose, no markdown, no extra text.
 ANNOTATION_REPAIR_PROMPT = """You fix annotation outputs into valid JSON.
 Return ONLY a JSON array of objects with this schema:
 { type: 'highlight' | 'note' | 'definition', text_ref: string, note: string, importance: 1 | 2 | 3 }
-Do not include markdown fences or prose."""
+Do not include markdown fences or prose.
+No two objects may reuse the same normalized text_ref.
+If type is 'definition', text_ref must be only the exact term being defined."""
+
+SUMMARY_PROMPT = """
+You are an expert research assistant summarizing an academic paper for a technically literate reader.
+
+Write exactly 3 concise markdown bullet points that capture:
+- the paper's main contribution or thesis
+- the key method or mechanism
+- the most important result, implication, or limitation
+
+Rules:
+- Return ONLY the bullet list. No heading, no intro sentence, no code fences.
+- Each bullet should be 1 sentence.
+- Keep the bullets specific and concrete.
+- You may use inline or block LaTeX when it clarifies math.
+- Prefer the paper's core ideas over implementation trivia.
+"""
 
 
 class IngestRequest(BaseModel):
     arxiv_id: str = Field(min_length=4)
     job_id: str | None = None
+
+
+class SummaryRequest(BaseModel):
+    title: str = Field(min_length=1)
+    abstract: str = Field(min_length=1)
+    fullText: str = Field(min_length=1)
 
 
 class BoundingBox(BaseModel):
@@ -120,11 +153,16 @@ class IngestResponse(BaseModel):
     arxivId: str
     title: str
     abstract: str
+    summary: str
     pdfUrl: str
     fullText: str
     pageCount: int
     starterQuestions: list[str]
     annotations: list[Annotation]
+
+
+class SummaryResponse(BaseModel):
+    summary: str
 
 
 app = FastAPI(title="ArXiv Annotation Agent Python Service")
@@ -139,6 +177,12 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/summarize", response_model=SummaryResponse)
+def summarize(request: SummaryRequest) -> SummaryResponse:
+    summary = summarize_paper(request.title, request.abstract, request.fullText)
+    return SummaryResponse(summary=summary)
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -163,6 +207,10 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     logger.info("Extracting text blocks for %s", normalized_arxiv_id)
     blocks = extract_blocks(pdf_doc)
     full_text = "\n\n".join(block["text"] for block in blocks)
+
+    write_progress(request.job_id, {"status": "running", "stage": "summarizing", "message": "Generating AI key points..."})
+    logger.info("Generating paper summary for %s", normalized_arxiv_id)
+    summary = summarize_paper(paper.title, paper.summary, full_text)
 
     write_progress(request.job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
     logger.info("Chunking extracted text for %s", normalized_arxiv_id)
@@ -200,6 +248,7 @@ async def ingest(request: IngestRequest) -> IngestResponse:
         arxivId=normalized_arxiv_id,
         title=paper.title,
         abstract=paper.summary,
+        summary=summary,
         pdfUrl=paper.pdf_url,
         fullText=full_text,
         pageCount=pdf_doc.page_count,
@@ -347,10 +396,14 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 chunk["text"],
             )
             for item in parsed:
+                normalized_text_ref = normalize_annotation_text_ref(item["text_ref"])
+                if not normalized_text_ref:
+                    continue
+
                 annotations.append(
                     Annotation(
                         type=item["type"],
-                        text_ref=item["text_ref"],
+                        text_ref=normalized_text_ref,
                         note=item["note"],
                         importance=item["importance"],
                         bbox=BoundingBox(**chunk["bbox"]),
@@ -371,38 +424,108 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 f"OpenAI annotation failed on page {chunk['page_number']} with model {model_name}: {error}"
             ) from error
 
-    return annotations
+    return dedupe_annotations(annotations)
 
 
 def resolve_annotation_model(client: OpenAI, probe_text: str) -> str:
+    return resolve_chat_model(
+        client,
+        ANNOTATION_MODELS,
+        [
+            {"role": "system", "content": "Reply with []"},
+            {"role": "user", "content": probe_text[:200] or "Test"},
+        ],
+        "annotation",
+    )
+
+
+def resolve_summary_model(client: OpenAI, probe_text: str) -> str:
+    return resolve_chat_model(
+        client,
+        SUMMARY_MODELS,
+        [
+            {"role": "system", "content": "Reply with ok"},
+            {"role": "user", "content": probe_text[:200] or "Test"},
+        ],
+        "summary",
+    )
+
+
+def resolve_chat_model(client: OpenAI, model_names: list[str], probe_messages: list[dict], label: str) -> str:
     last_error: Exception | None = None
 
-    for model_name in ANNOTATION_MODELS:
+    for model_name in model_names:
         try:
-            logger.info("Probing annotation model availability: %s", model_name)
+            logger.info("Probing %s model availability: %s", label, model_name)
             client.chat.completions.create(
                 model=model_name,
                 max_tokens=32,
-                messages=[
-                    {"role": "system", "content": "Reply with []"},
-                    {"role": "user", "content": probe_text[:200] or "Test"},
-                ],
+                messages=probe_messages,
             )
-            logger.info("Using annotation model %s", model_name)
+            logger.info("Using %s model %s", label, model_name)
             return model_name
         except NotFoundError as error:
             last_error = error
-            logger.warning("Annotation model %s is unavailable for this OpenAI account", model_name)
+            logger.warning("%s model %s is unavailable for this OpenAI account", label.capitalize(), model_name)
             continue
 
-    tried_models = ", ".join(ANNOTATION_MODELS)
+    tried_models = ", ".join(model_names)
     raise RuntimeError(
-        f"No configured OpenAI annotation models are available. Tried: {tried_models}"
+        f"No configured OpenAI {label} models are available. Tried: {tried_models}"
     ) from last_error
+
+
+def summarize_paper(title: str, abstract: str, full_text: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is missing for the Python annotation service.")
+
+    client = OpenAI(api_key=api_key, timeout=ANNOTATION_REQUEST_TIMEOUT)
+    model_name = resolve_summary_model(client, f"{title}\n{abstract}")
+    source_text = truncate_summary_source(full_text)
+    response = client.chat.completions.create(
+        model=model_name,
+        max_tokens=280,
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": SUMMARY_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Title:\n{title}\n\n"
+                    f"Abstract:\n{abstract}\n\n"
+                    "Extracted paper text:\n"
+                    f"{source_text}"
+                ),
+            },
+        ],
+    )
+
+    summary = normalize_summary_markdown(extract_text_content(response))
+    if not summary:
+        raise RuntimeError("Summary generation returned an empty response.")
+
+    return summary
 
 
 def extract_text_content(response) -> str:
     return response.choices[0].message.content.strip() if response.choices and response.choices[0].message.content else ""
+
+
+def normalize_summary_markdown(text: str) -> str:
+    normalized = text.strip()
+    fenced_match = re.search(r"```(?:markdown)?\s*([\s\S]*?)```", normalized)
+    if fenced_match:
+        normalized = fenced_match.group(1).strip()
+
+    bullet_lines = [line.rstrip() for line in normalized.splitlines() if line.strip()]
+    if not bullet_lines:
+        return ""
+
+    if not all(line.lstrip().startswith(("-", "*")) for line in bullet_lines):
+        bullet_lines = [f"- {line.lstrip('-* ').strip()}" for line in bullet_lines[:3] if line.strip()]
+
+    return "\n".join(bullet_lines[:3]).strip()
 
 
 def parse_annotation_json(text: str):
@@ -466,6 +589,50 @@ def repair_annotation_json(
         raise RuntimeError(f"OpenAI returned non-JSON annotation output: {repaired_text[:200]!r}")
 
     return repaired
+
+
+def truncate_summary_source(full_text: str, limit: int = 12000) -> str:
+    normalized = full_text.strip()
+    if len(normalized) <= limit:
+        return normalized
+
+    truncated = normalized[:limit].rsplit(" ", 1)[0].strip()
+    return f"{truncated}\n\n[truncated]"
+
+
+def normalize_annotation_text_ref(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def dedupe_annotations(annotations: list[Annotation]) -> list[Annotation]:
+    winners: dict[tuple[int, str], tuple[Annotation, int]] = {}
+
+    for index, annotation in enumerate(annotations):
+        key = (annotation.page_number, normalize_annotation_text_ref(annotation.text_ref))
+        if not key[1]:
+            continue
+
+        current = winners.get(key)
+        if current is None or annotation_rank(annotation, index) > annotation_rank(current[0], current[1]):
+            annotation.text_ref = key[1]
+            winners[key] = (annotation, index)
+
+    return [
+        annotation
+        for annotation, _ in sorted(
+            winners.values(),
+            key=lambda candidate: (candidate[0].page_number, candidate[1]),
+        )
+    ]
+
+
+def annotation_rank(annotation: Annotation, index: int) -> tuple[int, int, int]:
+    type_priority = {
+        "definition": 0,
+        "note": 1,
+        "highlight": 2,
+    }
+    return (annotation.importance, type_priority[annotation.type], -index)
 
 
 def should_skip_block(text: str) -> bool:

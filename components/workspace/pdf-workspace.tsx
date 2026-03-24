@@ -3,6 +3,7 @@
 import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Document, Page, pdfjs } from "react-pdf";
+import { RichText } from "@/components/rich-text";
 import type { AnnotationRecord, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
@@ -30,6 +31,7 @@ type IngestProgress = {
 export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const router = useRouter();
   const [pageCount, setPageCount] = useState<number>(0);
+  const [pageWidth, setPageWidth] = useState<number>();
   const [activePopup, setActivePopup] = useState<PopupState>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
@@ -37,6 +39,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const [reprocessProgress, setReprocessProgress] = useState<IngestProgress | null>(null);
   const pdfFileUrl = `/api/papers/${workspace.paper.id}/pdf`;
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const viewerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     function onEscape(event: KeyboardEvent) {
@@ -60,6 +63,27 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) {
+      return;
+    }
+
+    const updatePageWidth = () => {
+      const nextWidth = Math.max(Math.floor(viewer.getBoundingClientRect().width), 320);
+      setPageWidth(nextWidth);
+    };
+
+    updatePageWidth();
+
+    const observer = new ResizeObserver(updatePageWidth);
+    observer.observe(viewer);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   const annotationsByPage = useMemo(() => {
     return workspace.annotations.reduce<Record<number, AnnotationRecord[]>>((acc, annotation) => {
       acc[annotation.pageNumber] ??= [];
@@ -67,6 +91,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
       return acc;
     }, {});
   }, [workspace.annotations]);
+  const summaryContent = workspace.paper.aiSummary ?? workspace.paper.abstract;
 
   async function onReprocess() {
     setIsReprocessing(true);
@@ -130,7 +155,18 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
           </button>
           <p className="text-xs uppercase tracking-[0.28em] text-night/40">{workspace.paper.arxivId}</p>
           <h1 className="mt-2 max-w-4xl font-serif text-3xl leading-tight md:text-4xl">{workspace.paper.title}</h1>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-night/65">{workspace.paper.abstract}</p>
+          <section className="mt-5 max-w-3xl rounded-[1.6rem] border border-black/10 bg-white/78 p-5 shadow-sm backdrop-blur">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-night/45">AI key points</p>
+                <p className="mt-1 text-xs text-night/45">Short summary generated from the paper abstract and extracted text.</p>
+              </div>
+              <span className="rounded-full border border-black/10 bg-[#f5ecdd] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-night/50">
+                LaTeX ready
+              </span>
+            </div>
+            <RichText content={summaryContent} className="mt-4 text-[15px] leading-7 text-night/72" />
+          </section>
         </div>
         <button
           className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm"
@@ -170,7 +206,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         </div>
       ) : null}
 
-      <div className="mx-auto flex max-w-5xl flex-col gap-8">
+      <div ref={viewerRef} className="mx-auto flex w-full max-w-[1180px] flex-col gap-6">
         {pdfError ? (
           <div className="rounded-[1.5rem] border border-red-200 bg-red-50 p-6 text-red-900 shadow-sm">
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-red-700">PDF unavailable</p>
@@ -202,8 +238,8 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
             const pageAnnotations = annotationsByPage[pageNumber] ?? [];
 
             return (
-              <section key={pageNumber} className="relative rounded-[1.5rem] bg-white p-4 shadow-float">
-                <div className="mb-3 flex items-center justify-between px-2">
+              <section key={pageNumber} className="relative overflow-hidden rounded-[1.5rem] bg-white shadow-float">
+                <div className="flex items-center justify-between px-3 pb-2 pt-3">
                   <span className="text-xs uppercase tracking-[0.25em] text-night/40">Page {pageNumber}</span>
                   <span className="text-xs text-night/50">{pageAnnotations.length} annotations</span>
                 </div>
@@ -211,9 +247,14 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
                   ref={(node) => {
                     pageRefs.current[pageNumber] = node;
                   }}
-                  className="relative mx-auto w-fit"
+                  className="relative mx-auto w-fit max-w-full"
                 >
-                  <Page pageNumber={pageNumber} renderAnnotationLayer={false} renderTextLayer={true} />
+                  <Page
+                    pageNumber={pageNumber}
+                    renderAnnotationLayer={false}
+                    renderTextLayer={true}
+                    width={pageWidth}
+                  />
                   <AnnotationOverlay
                     annotations={pageAnnotations}
                     pageRootRef={{
@@ -249,6 +290,7 @@ function AnnotationOverlay({
 
   useEffect(() => {
     let cancelled = false;
+    let observer: MutationObserver | null = null;
 
     const updateLayouts = () => {
       if (cancelled) {
@@ -268,11 +310,23 @@ function AnnotationOverlay({
     };
 
     const rafId = window.requestAnimationFrame(updateLayouts);
+    const pageRoot = pageRootRef.current;
+
+    if (pageRoot) {
+      observer = new MutationObserver(updateLayouts);
+      observer.observe(pageRoot, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    }
+
     window.addEventListener("resize", updateLayouts);
 
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(rafId);
+      observer?.disconnect();
       window.removeEventListener("resize", updateLayouts);
     };
   }, [annotations, pageRootRef]);
@@ -280,7 +334,7 @@ function AnnotationOverlay({
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
       {annotations.map((annotation) => (
-        <AnnotationUnderline
+        <AnnotationHighlight
           key={annotation.id}
           annotation={annotation}
           layout={layouts[annotation.id]}
@@ -300,13 +354,19 @@ function PaperCard({ label }: { label: string }) {
 }
 
 type ResolvedAnnotationLayout = {
+  fragments: HighlightFragment[];
+  anchorX: number;
+  anchorY: number;
+};
+
+type HighlightFragment = {
   x: number;
   y: number;
   width: number;
   height: number;
 };
 
-function AnnotationUnderline({
+function AnnotationHighlight({
   annotation,
   layout,
   onOpen
@@ -317,37 +377,49 @@ function AnnotationUnderline({
 }) {
   const tone = annotationTone(annotation.type);
   const style = importanceStyle(annotation.importance);
-  const { x, y, width, height } = layout ?? annotation.bbox;
+  const resolvedLayout = layout ?? createFallbackLayout(annotation.bbox);
 
   return (
-    <button
-      className="pointer-events-auto absolute z-10 cursor-pointer"
-      style={{
-        left: `${x * 100}%`,
-        top: `${(y + Math.max(height - 0.01, 0)) * 100}%`,
-        width: `${width * 100}%`,
-        height: `${Math.max(height * 100, 1.6)}%`
-      }}
-      title={annotation.note}
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpen({
-          x: x + width / 2,
-          y
-        });
-      }}
-    >
-      <span
-        className="absolute inset-x-0 bottom-0 block rounded-full"
-        style={{
-          borderBottom: `${style.strokeWidth}px solid ${tone}`,
-          opacity: style.opacity
-        }}
-      />
-      <span className="absolute inset-x-0 bottom-0 top-[-8px]" />
-      <span className="sr-only">{annotation.type}</span>
-    </button>
+    <>
+      {resolvedLayout.fragments.map((fragment, index) => (
+        <button
+          key={`${annotation.id}-${index}`}
+          aria-label={`${annotation.type}: ${annotation.textRef}`}
+          className="pointer-events-auto absolute z-10 cursor-pointer rounded-[4px] transition-transform hover:scale-[1.01]"
+          style={{
+            left: `${fragment.x * 100}%`,
+            top: `${fragment.y * 100}%`,
+            width: `${fragment.width * 100}%`,
+            height: `${fragment.height * 100}%`
+          }}
+          title={annotation.note}
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen({
+              x: resolvedLayout.anchorX,
+              y: resolvedLayout.anchorY
+            });
+          }}
+        >
+          <span
+            className="absolute inset-0 rounded-[4px]"
+            style={{
+              backgroundColor: tone,
+              opacity: style.fillOpacity
+            }}
+          />
+          <span
+            className="absolute inset-0 rounded-[4px] border"
+            style={{
+              borderColor: tone,
+              opacity: style.borderOpacity
+            }}
+          />
+          {index === 0 ? <span className="sr-only">{annotation.type}</span> : null}
+        </button>
+      ))}
+    </>
   );
 }
 
@@ -377,7 +449,7 @@ function AnnotationPopup({
         </span>
         <span className="text-xs text-night/45">Importance {popup.annotation.importance}</span>
       </div>
-      <p className="mt-4 text-sm leading-6 text-night">{popup.annotation.note}</p>
+      <RichText content={popup.annotation.note} className="mt-4 text-sm leading-6 text-night" />
       <button className="mt-4 text-sm font-medium text-night/65" onClick={onClose} type="button">
         Dismiss
       </button>
@@ -388,71 +460,71 @@ function AnnotationPopup({
 function resolveAnnotationLayout(annotation: AnnotationRecord, pageRoot: HTMLDivElement): ResolvedAnnotationLayout {
   const textLayer = pageRoot.querySelector(".react-pdf__Page__textContent");
   if (!textLayer) {
-    return annotation.bbox;
+    return createFallbackLayout(annotation.bbox);
   }
 
-  const matchedRect = matchTextLayerRect(annotation.textRef, textLayer, pageRoot);
-  return matchedRect ?? annotation.bbox;
+  const matchedFragments = matchTextLayerFragments(annotation.textRef, textLayer, pageRoot);
+  return matchedFragments ? buildResolvedLayout(matchedFragments) : createFallbackLayout(annotation.bbox);
 }
 
-function matchTextLayerRect(query: string, textLayer: Element, pageRoot: HTMLDivElement): ResolvedAnnotationLayout | null {
+function matchTextLayerFragments(query: string, textLayer: Element, pageRoot: HTMLDivElement): HighlightFragment[] | null {
   const normalizedQuery = normalizeText(query);
   if (!normalizedQuery) {
     return null;
   }
 
-  const queryWords = normalizedQuery.split(" ").filter((word) => word.length > 3).slice(0, 5);
-  const spans = Array.from(textLayer.querySelectorAll("span")).map((span) => ({
-    element: span,
-    text: normalizeText(span.textContent ?? "")
-  }));
+  const queryWords = normalizedQuery.split(" ").filter((word) => word.length > 2).slice(0, 6);
+  const queryTarget = normalizedQuery.slice(0, Math.min(normalizedQuery.length, 120));
+  const spans = Array.from(textLayer.querySelectorAll("span"))
+    .map((span) => ({
+      element: span,
+      text: normalizeText(span.textContent ?? "")
+    }))
+    .filter((span) => span.text);
 
   const rootRect = pageRoot.getBoundingClientRect();
 
   for (let index = 0; index < spans.length; index += 1) {
     const span = spans[index];
-    if (!span.text) {
-      continue;
-    }
-
-    const wordMatch = queryWords.some((word) => span.text.includes(word) || word.includes(span.text));
+    const wordMatch =
+      queryWords.length === 0 || queryWords.some((word) => span.text.includes(word) || word.includes(span.text));
     if (!wordMatch) {
       continue;
     }
 
     const matchedElements = [span.element];
     let combinedText = span.text;
-    const baseTop = span.element.getBoundingClientRect().top;
+    const lineBuckets = new Set([Math.round(span.element.getBoundingClientRect().top / 6)]);
 
-    for (let nextIndex = index + 1; nextIndex < spans.length && matchedElements.length < 8; nextIndex += 1) {
+    if (combinedText.includes(queryTarget)) {
+      return buildHighlightFragments(matchedElements, rootRect);
+    }
+
+    for (let nextIndex = index + 1; nextIndex < spans.length && matchedElements.length < 24; nextIndex += 1) {
       const nextSpan = spans[nextIndex];
-      if (!nextSpan.text) {
-        continue;
-      }
-
       const nextRect = nextSpan.element.getBoundingClientRect();
-      if (Math.abs(nextRect.top - baseTop) > 12) {
+      lineBuckets.add(Math.round(nextRect.top / 6));
+      if (lineBuckets.size > 5) {
         break;
       }
 
       matchedElements.push(nextSpan.element);
       combinedText = `${combinedText} ${nextSpan.text}`.trim();
 
-      if (combinedText.includes(normalizedQuery.slice(0, Math.min(normalizedQuery.length, 72)))) {
+      if (combinedText.includes(queryTarget)) {
+        return buildHighlightFragments(matchedElements, rootRect);
+      }
+
+      if (combinedText.length > normalizedQuery.length + 160) {
         break;
       }
-    }
-
-    const unionRect = buildUnionRect(matchedElements, rootRect);
-    if (unionRect) {
-      return unionRect;
     }
   }
 
   return null;
 }
 
-function buildUnionRect(elements: Element[], rootRect: DOMRect): ResolvedAnnotationLayout | null {
+function buildHighlightFragments(elements: Element[], rootRect: DOMRect): HighlightFragment[] | null {
   const rects = elements
     .map((element) => element.getBoundingClientRect())
     .filter((rect) => rect.width > 0 && rect.height > 0);
@@ -461,17 +533,63 @@ function buildUnionRect(elements: Element[], rootRect: DOMRect): ResolvedAnnotat
     return null;
   }
 
-  const left = Math.min(...rects.map((rect) => rect.left));
-  const top = Math.min(...rects.map((rect) => rect.top));
-  const right = Math.max(...rects.map((rect) => rect.right));
-  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+  const mergedRects = rects
+    .sort((leftRect, rightRect) => {
+      if (Math.abs(leftRect.top - rightRect.top) < 6) {
+        return leftRect.left - rightRect.left;
+      }
+
+      return leftRect.top - rightRect.top;
+    })
+    .reduce<Array<{ left: number; top: number; right: number; bottom: number }>>((acc, rect) => {
+      const previous = acc.at(-1);
+
+      if (previous && Math.abs(previous.top - rect.top) < 6 && rect.left <= previous.right + 8) {
+        previous.left = Math.min(previous.left, rect.left);
+        previous.top = Math.min(previous.top, rect.top);
+        previous.right = Math.max(previous.right, rect.right);
+        previous.bottom = Math.max(previous.bottom, rect.bottom);
+        return acc;
+      }
+
+      acc.push({
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom
+      });
+      return acc;
+    }, []);
+
+  return mergedRects.map((rect) => ({
+    x: (rect.left - rootRect.left) / rootRect.width,
+    y: (rect.top - rootRect.top) / rootRect.height,
+    width: (rect.right - rect.left) / rootRect.width,
+    height: (rect.bottom - rect.top) / rootRect.height
+  }));
+}
+
+function buildResolvedLayout(fragments: HighlightFragment[]): ResolvedAnnotationLayout {
+  const left = Math.min(...fragments.map((fragment) => fragment.x));
+  const top = Math.min(...fragments.map((fragment) => fragment.y));
+  const right = Math.max(...fragments.map((fragment) => fragment.x + fragment.width));
 
   return {
-    x: (left - rootRect.left) / rootRect.width,
-    y: (top - rootRect.top) / rootRect.height,
-    width: (right - left) / rootRect.width,
-    height: (bottom - top) / rootRect.height
+    fragments,
+    anchorX: (left + right) / 2,
+    anchorY: top
   };
+}
+
+function createFallbackLayout(bbox: AnnotationRecord["bbox"]): ResolvedAnnotationLayout {
+  return buildResolvedLayout([
+    {
+      x: bbox.x,
+      y: bbox.y,
+      width: bbox.width,
+      height: bbox.height
+    }
+  ]);
 }
 
 function normalizeText(value: string) {
