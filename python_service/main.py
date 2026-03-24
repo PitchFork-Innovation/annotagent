@@ -316,7 +316,7 @@ You may edit, shorten, deduplicate, or delete annotations.
 
 Validation rules:
 - Every text_ref must be an exact substring of the provided page excerpt for that page_number.
-- definition text_ref must be under 8 words unless a longer exact quote is absolutely necessary for understanding.
+- definition text_ref must be under 5 words unless a longer exact quote is absolutely necessary for understanding.
 - note and highlight text_ref must be under 15 words unless a longer exact quote is absolutely necessary for understanding.
 - When a longer text_ref is truly necessary, keep only the minimum extra words needed.
 - No two annotations may reuse the same normalized text_ref anywhere in the final array.
