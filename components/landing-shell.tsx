@@ -92,14 +92,14 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
           <div className="grid gap-8 p-8 md:grid-cols-[1.2fr_0.8fr] md:p-12">
             <div className="space-y-6">
               <p className="inline-flex rounded-full border border-ink/15 bg-ink/5 px-4 py-2 text-xs font-medium uppercase tracking-[0.3em] text-ink">
-                ArXiv Annotation Agent
+                Annotagent
               </p>
               <div className="space-y-4">
                 <h1 className="max-w-3xl font-serif text-4xl leading-tight text-night md:text-6xl">
-                  Read machine learning papers with inline underlines, margin notes, and a paper-aware chat copilot.
+                  Read academic papers with inline underlines, margin notes, and a paper-aware chat copilot.
                 </h1>
                 <p className="max-w-2xl text-lg leading-8 text-night/70">
-                  Paste an arXiv ID, fetch the PDF, generate structured annotations with OpenAI, and explore the paper through a NotebookLM-style inquiry panel.
+                  Paste an arXiv ID, fetch the PDF, generate structured annotations with OpenAI, and explore the paper through an agentic inquiry panel.
                 </p>
               </div>
               <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onSubmit}>

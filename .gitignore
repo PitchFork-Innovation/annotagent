@@ -13,3 +13,5 @@ tmp
 arxiv_annotation_agent_PRD_v2.pdf
 .vercel
 .env*.local
+
+tsconfig.tsbuildinfo

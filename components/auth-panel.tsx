@@ -74,7 +74,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
       <div>
         <h2 className="text-2xl font-semibold">Sign in required</h2>
         <p className="mt-2 text-sm leading-6 text-white/70">
-          The PRD requires private per-user paper libraries via Supabase Auth. Use an email magic link to unlock
+          We require private per-user paper libraries via Supabase Auth. Use an email magic link to unlock
           ingestion and your saved library.
         </p>
       </div>

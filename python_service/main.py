@@ -210,9 +210,13 @@ async def ingest(request: IngestRequest) -> IngestResponse:
 
 def normalize_arxiv_id(arxiv_id: str) -> str:
     candidate = arxiv_id.strip()
-    candidate = re.sub(r"^https?://arxiv\.org/(abs|pdf)/", "", candidate)
-    candidate = re.sub(r"\.pdf$", "", candidate)
+    candidate = re.sub(r"^https?://(?:www\.|export\.)?arxiv\.org/", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^(abs|pdf)/", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"[?#].*$", "", candidate)
+    candidate = candidate.strip("/")
+    candidate = re.sub(r"\.pdf$", "", candidate, flags=re.IGNORECASE)
     candidate = re.sub(r"^arxiv:", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"v\d+$", "", candidate, flags=re.IGNORECASE)
     return candidate
 
 
