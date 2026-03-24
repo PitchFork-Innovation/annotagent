@@ -197,7 +197,7 @@ export async function upsertChatHistory(paperId: string, messages: ChatMessage[]
   await setChatHistory(paperId, messages);
 }
 
-export async function reprocessPaperAnnotations(paperId: string, userId: string) {
+export async function reprocessPaperAnnotations(paperId: string, userId: string, jobId?: string) {
   const supabase = await createSupabaseServerClient();
   const admin = createSupabaseAdminClient();
 
@@ -214,7 +214,7 @@ export async function reprocessPaperAnnotations(paperId: string, userId: string)
     throw new Error("Paper not found in your library.");
   }
 
-  await upgradePaperFromPipeline(admin, paper.id, paper.arxiv_id);
+  await upgradePaperFromPipeline(admin, paper.id, paper.arxiv_id, jobId);
 
   const { count } = await admin
     .from("annotations")

@@ -1,12 +1,24 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState } from "react";
 import type { PaperWorkspace } from "@/lib/types";
 import { ChatPanel } from "./chat-panel";
-import { PdfWorkspace } from "./pdf-workspace";
+
+const PdfWorkspace = dynamic(
+  () => import("./pdf-workspace").then((module) => module.PdfWorkspace),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-screen items-center justify-center bg-[#efe7d7] text-night/55">
+        Loading paper workspace...
+      </div>
+    )
+  }
+);
 
 export function AnnotationWorkspace({ workspace }: { workspace: PaperWorkspace }) {
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   return (
     <main className="min-h-screen bg-[#efe7d7] text-night">

@@ -19,6 +19,14 @@ type PopupState = {
   y: number;
 } | null;
 
+type IngestProgress = {
+  status?: "pending" | "running" | "completed" | "failed";
+  stage?: string;
+  message?: string;
+  currentChunk?: number;
+  totalChunks?: number;
+};
+
 export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const router = useRouter();
   const [pageCount, setPageCount] = useState<number>(0);
@@ -26,6 +34,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [reprocessProgress, setReprocessProgress] = useState<IngestProgress | null>(null);
   const pdfFileUrl = `/api/papers/${workspace.paper.id}/pdf`;
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
@@ -62,10 +71,27 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   async function onReprocess() {
     setIsReprocessing(true);
     setReprocessMessage(null);
+    setReprocessProgress(null);
+    const jobId = crypto.randomUUID();
+    const progressInterval = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/ingest/progress?jobId=${jobId}`, {
+          cache: "no-store"
+        });
+        const json = await response.json();
+        setReprocessProgress(json);
+      } catch {
+        // Leave the current progress state in place during transient polling failures.
+      }
+    }, 1000);
 
     try {
       const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess`, {
-        method: "POST"
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ jobId })
       });
       const json = await response.json();
 
@@ -79,14 +105,29 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
     } catch (error) {
       setReprocessMessage(error instanceof Error ? error.message : "Unable to reprocess annotations.");
     } finally {
+      window.clearInterval(progressInterval);
       setIsReprocessing(false);
     }
   }
+
+  const reprocessProgressValue =
+    reprocessProgress?.totalChunks && reprocessProgress.totalChunks > 0 && reprocessProgress.currentChunk
+      ? Math.min((reprocessProgress.currentChunk / reprocessProgress.totalChunks) * 100, 100)
+      : reprocessProgress?.status === "completed"
+        ? 100
+        : 8;
 
   return (
     <div className="px-4 py-5 md:px-8">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
+          <button
+            className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm transition hover:bg-white"
+            onClick={() => router.push("/")}
+            type="button"
+          >
+            Back to library
+          </button>
           <p className="text-xs uppercase tracking-[0.28em] text-night/40">{workspace.paper.arxivId}</p>
           <h1 className="mt-2 max-w-4xl font-serif text-3xl leading-tight md:text-4xl">{workspace.paper.title}</h1>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-night/65">{workspace.paper.abstract}</p>
@@ -110,6 +151,24 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         </button>
         {reprocessMessage ? <p className="text-sm text-night/65">{reprocessMessage}</p> : null}
       </div>
+      {isReprocessing ? (
+        <div className="mb-5 space-y-3 rounded-[1.5rem] border border-black/10 bg-white/70 p-4 shadow-sm">
+          <div className="overflow-hidden rounded-full bg-black/10">
+            <div
+              className="h-2 rounded-full bg-ink transition-[width] duration-700"
+              style={{ width: `${reprocessProgressValue}%` }}
+            />
+          </div>
+          <p className="text-sm text-night/60">
+            {reprocessProgress?.message ?? "Re-running PDF extraction and annotation generation for this paper."}
+          </p>
+          {reprocessProgress?.currentChunk && reprocessProgress?.totalChunks ? (
+            <p className="text-xs uppercase tracking-[0.18em] text-night/45">
+              Chunk {reprocessProgress.currentChunk} of {reprocessProgress.totalChunks}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mx-auto flex max-w-5xl flex-col gap-8">
         {pdfError ? (
