@@ -297,7 +297,7 @@ Return ONLY a JSON array of objects with this schema:
 Do not include markdown fences or prose.
 No two objects may reuse the same normalized text_ref.
 If type is 'definition', text_ref must be only the exact term being defined. If it isn't, adjust it to be.
-Definitions must use text_ref under 8 words unless absolutely necessary.
+Definitions must use text_ref under 5 words unless absolutely necessary.
 Notes and highlights must use text_ref under 15 words unless absolutely necessary.
 If examples are present below, follow them closely:
 """ + ANNOTATION_EXAMPLES
@@ -589,7 +589,7 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
             )
             response = client.chat.completions.create(
                 model=model_name,
-                max_tokens=700,
+                max_completion_tokens=700,
                 temperature=0,
                 messages=[
                     {"role": "system", "content": ANNOTATION_PROMPT},
@@ -700,7 +700,7 @@ def resolve_chat_model(client: OpenAI, model_names: list[str], probe_messages: l
             logger.info("Probing %s model availability: %s", label, model_name)
             client.chat.completions.create(
                 model=model_name,
-                max_tokens=32,
+                max_completion_tokens=32,
                 messages=probe_messages,
             )
             logger.info("Using %s model %s", label, model_name)
@@ -726,7 +726,7 @@ def summarize_paper(title: str, abstract: str, full_text: str) -> str:
     source_text = truncate_summary_source(full_text)
     response = client.chat.completions.create(
         model=model_name,
-        max_tokens=280,
+        max_completion_tokens=280,
         temperature=0.2,
         messages=[
             {"role": "system", "content": SUMMARY_PROMPT},
@@ -807,7 +807,7 @@ def repair_annotation_json(
     )
     repair_response = client.chat.completions.create(
         model=model_name,
-        max_tokens=700,
+        max_completion_tokens=700,
         temperature=0,
         messages=[
             {"role": "system", "content": ANNOTATION_REPAIR_PROMPT},
@@ -844,7 +844,7 @@ def validate_annotations(
     page_sources = build_page_sources(chunks)
     validation_response = client.chat.completions.create(
         model=model_name,
-        max_tokens=2200,
+        max_completion_tokens=2200,
         temperature=0,
         messages=[
             {"role": "system", "content": ANNOTATION_VALIDATION_PROMPT},
