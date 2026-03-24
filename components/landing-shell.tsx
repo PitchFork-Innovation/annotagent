@@ -191,7 +191,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
               <p className="mt-2 text-sm leading-6 text-night/60">
                 {user
                   ? "Paste an arXiv ID above to ingest your first paper and open the annotation workspace."
-                  : "Once you use the magic link above, every ingested paper will be saved to your own account."}
+                  : "Once you sign in above, every ingested paper will be saved to your own account."}
               </p>
             </div>
           )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -11,26 +12,25 @@ type Props = {
 };
 
 export function AuthPanel({ user, hasAuthError = false }: Props) {
+  const router = useRouter();
   const [supabase] = useState(() => createSupabaseBrowserClient());
   const [email, setEmail] = useState(user?.email ?? "");
+  const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(
-    hasAuthError ? "That sign-in link was invalid or expired. Request a fresh one below." : null
+    hasAuthError ? "Authentication could not be completed. Try signing in again below." : null
   );
   const [error, setError] = useState<string | null>(null);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function onSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setNotice(null);
     setIsSubmitting(true);
 
-    const redirectTo = `${window.location.origin}/auth/callback?next=/`;
-    const { error: authError } = await supabase.auth.signInWithOtp({
+    const { error: authError } = await supabase.auth.signInWithPassword({
       email,
-      options: {
-        emailRedirectTo: redirectTo
-      }
+      password
     });
 
     setIsSubmitting(false);
@@ -40,7 +40,52 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
       return;
     }
 
-    setNotice(`Magic link sent to ${email}. Open it on this device to unlock your private paper library.`);
+    router.refresh();
+  }
+
+  async function onSignUp() {
+    setError(null);
+    setNotice(null);
+    setIsSubmitting(true);
+
+    const { data, error: authError } = await supabase.auth.signUp({
+      email,
+      password
+    });
+
+    setIsSubmitting(false);
+
+    if (authError) {
+      setError(authError.message);
+      return;
+    }
+
+    if (data.session) {
+      router.refresh();
+      return;
+    }
+
+    setNotice(`Account created for ${email}. Check your inbox if email confirmation is enabled in Supabase.`);
+  }
+
+  async function onResetPassword() {
+    setError(null);
+    setNotice(null);
+    setIsSubmitting(true);
+
+    const redirectTo = `${window.location.origin}/auth/callback?next=/reset-password`;
+    const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo
+    });
+
+    setIsSubmitting(false);
+
+    if (authError) {
+      setError(authError.message);
+      return;
+    }
+
+    setNotice(`Password reset email sent to ${email}. Use the link in that email to set a password.`);
   }
 
   if (user) {
@@ -74,17 +119,26 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
       <div>
         <h2 className="text-2xl font-semibold">Sign in required</h2>
         <p className="mt-2 text-sm leading-6 text-white/70">
-          We require private per-user paper libraries via Supabase Auth. Use an email magic link to unlock
-          ingestion and your saved library.
+          We require private per-user paper libraries via Supabase Auth. Sign in with your email and password
+          to unlock ingestion and your saved library.
         </p>
       </div>
-      <form className="space-y-3" onSubmit={onSubmit}>
+      <form className="space-y-3" onSubmit={onSignIn}>
         <input
           className="h-12 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/30"
           type="email"
           placeholder="you@lab.edu"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
+          required
+        />
+        <input
+          className="h-12 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/30"
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          minLength={6}
           required
         />
         <button
@@ -95,7 +149,26 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
           disabled={isSubmitting}
           type="submit"
         >
-          {isSubmitting ? "Sending magic link..." : "Email me a sign-in link"}
+          {isSubmitting ? "Signing in..." : "Sign in"}
+        </button>
+        <button
+          className={cn(
+            "inline-flex h-12 w-full items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15",
+            isSubmitting && "cursor-progress opacity-70"
+          )}
+          disabled={isSubmitting}
+          onClick={onSignUp}
+          type="button"
+        >
+          {isSubmitting ? "Creating account..." : "Create account"}
+        </button>
+        <button
+          className="text-sm text-white/75 underline underline-offset-4 transition hover:text-white"
+          disabled={isSubmitting}
+          onClick={onResetPassword}
+          type="button"
+        >
+          Forgot password?
         </button>
       </form>
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
