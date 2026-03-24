@@ -7,6 +7,8 @@ This service implements the PRD's extraction pipeline:
 - extract page text blocks and bounding boxes with PyMuPDF
 - split text into paragraph-scale chunks
 - call OpenAI `gpt-4o-mini` for structured annotation JSON
+- run a post-annotation validation agent across the full annotation set
+- enforce strict `text_ref` length and uniqueness rules before returning them
 - validate annotations with Pydantic before returning them
 
 Run locally:

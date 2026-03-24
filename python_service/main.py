@@ -45,57 +45,248 @@ SUMMARY_MODELS = [
 ]
 ANNOTATION_REQUEST_TIMEOUT = float(os.getenv("OPENAI_ANNOTATION_TIMEOUT_SECONDS", "45"))
 
+ANNOTATION_EXAMPLES = """
+GOOD vs BAD SPAN EXTRACTION EXAMPLES
+
+These examples show how to extract MINIMAL text_ref from a larger passage.
+
+Example 1 (highlight)
+
+PASSAGE:
+"Our method reduces inference latency by 43% compared to prior approaches while maintaining accuracy."
+
+GOOD OUTPUT:
+{
+  "type": "highlight",
+  "text_ref": "reduces inference latency by 43%",
+  "note": "This is a key quantitative result showing a large practical speed improvement.",
+  "importance": 3
+}
+
+BAD text_ref (too long):
+"Our method reduces inference latency by 43% compared to prior approaches while maintaining accuracy."
+
+
+Example 2 (highlight)
+
+PASSAGE:
+"We introduce a retrieval-augmented training objective that improves generalization."
+
+GOOD OUTPUT:
+{
+  "type": "highlight",
+  "text_ref": "retrieval-augmented training objective",
+  "note": "This phrase names the paper's main methodological contribution.",
+  "importance": 3
+}
+
+BAD text_ref:
+"We introduce a retrieval-augmented training objective that improves generalization."
+
+
+Example 3 (note)
+
+PASSAGE:
+"Under a fixed compute budget, our model outperforms all baselines."
+
+GOOD OUTPUT:
+{
+  "type": "note",
+  "text_ref": "fixed compute budget",
+  "note": "This constraint makes the comparison fair, showing the gains are not due to using more compute.",
+  "importance": 2
+}
+
+BAD text_ref:
+"Under a fixed compute budget, our model outperforms all baselines."
+
+
+Example 4 (note)
+
+PASSAGE:
+"Performance degrades sharply beyond 16 layers, suggesting optimization instability."
+
+GOOD OUTPUT:
+{
+  "type": "note",
+  "text_ref": "degrades sharply beyond 16 layers",
+  "note": "This indicates a scaling limitation and potential instability in deeper models.",
+  "importance": 2
+}
+
+
+Example 5 (definition)
+
+PASSAGE:
+"We approximate attention using the Nyström approximation to reduce complexity."
+
+GOOD OUTPUT:
+{
+  "type": "definition",
+  "text_ref": "Nyström approximation",
+  "note": "A method for approximating large matrices using a subset of samples to reduce computation.",
+  "importance": 2
+}
+
+BAD text_ref:
+"approximate attention using the Nyström approximation"
+
+
+Example 6 (definition)
+
+PASSAGE:
+"We evaluate performance using BLEU and ROUGE metrics."
+
+GOOD OUTPUT:
+{
+  "type": "definition",
+  "text_ref": "BLEU",
+  "note": "A metric for evaluating generated text based on n-gram overlap with reference text.",
+  "importance": 1
+}
+""".strip()
+
 
 ANNOTATION_PROMPT = """
-You are an expert research paper annotator helping a technically literate reader understand an academic passage quickly and deeply.
+You are an expert research paper annotator.
 
-Given a passage of academic text, return a JSON array of annotation objects.
+Your task is to annotate an academic passage for a technically literate reader who is smart and comfortable with scientific writing, but is NOT necessarily an expert in this exact subfield.
+
+You must return a JSON array of annotation objects.
 Each object must conform exactly to this schema:
-{ "type": "highlight" | "note" | "definition", "text_ref": string, "note": string, "importance": 1 | 2 | 3 }
+{
+  "type": "highlight" | "note" | "definition",
+  "text_ref": string,
+  "note": string,
+  "importance": 1 | 2 | 3
+}
 
-Goal:
-Produce high-value annotations that help a reader identify the passage's main contributions, understand non-obvious reasoning, and learn domain-specific terms that block comprehension.
+CORE GOAL
+Produce only high-value annotations that materially improve reader understanding.
+A strong annotation should help the reader do at least one of these:
+- notice a central claim, contribution, result, or method detail
+- understand a non-obvious implication, assumption, caveat, or comparison
+- learn a specialized term, acronym, benchmark, dataset, or method name that would otherwise block comprehension
 
-Target reader:
-Assume the reader is intelligent and technically literate, but not an expert in this exact subfield.
+TARGET READER
+Assume the reader:
+- can follow technical prose
+- knows general scientific / ML / academic concepts
+- does NOT automatically know niche jargon, specialized methods, datasets, or subfield-specific terminology
 
-Annotation types:
-- highlight:
-  Use for the most important claims, results, contributions, methodological innovations, or takeaways.
-  A highlight should answer: "Why is this sentence or phrase important in the paper?"
-- note:
-  Use for non-obvious reasoning, hidden assumptions, implications, caveats, surprising comparisons, or interpretation that would help a reader understand the passage better.
-  A note should add value beyond paraphrasing.
-- definition:
-  Use for specialized technical terms, datasets, benchmarks, acronyms, or methods that a non-expert likely would not know.
-  Define the term briefly in the context of this passage.
-  For definitions, "text_ref" must contain only the exact word or short phrase being defined, never surrounding context.
+BE SELECTIVE
+Prefer fewer, stronger annotations over many weak ones.
+Do NOT annotate every sentence.
+Do NOT annotate text just because it sounds formal or important.
+Do NOT generate filler annotations.
 
-Importance scale:
-- 3 = critical to understanding the passage; core claim, main result, essential method, or essential term
+ANNOTATION TYPES
+
+1. highlight
+Use for:
+- central claim
+- main contribution
+- important result
+- key methodological innovation
+- especially important limitation or takeaway
+
+A highlight should answer:
+"Why is this statement important in the paper?"
+
+2. note
+Use for:
+- non-obvious reasoning
+- hidden assumptions
+- implications
+- caveats
+- surprising comparisons
+- interpretation that helps the reader understand significance
+
+A note should add insight, not merely paraphrase.
+
+3. definition
+Use for:
+- specialized jargon
+- acronyms
+- benchmarks
+- datasets
+- named methods / models
+- technical terms a non-expert in the subfield likely would not know
+
+A definition should explain the term briefly and in the context of this passage.
+
+IMPORTANCE RUBRIC
+- 3 = essential for understanding this passage; central claim/result/method or essential technical term
 - 2 = meaningfully helpful clarification or supporting idea
-- 1 = useful but optional context
+- 1 = optional but useful context
 
-Rules:
-- Be selective. Prefer fewer, high-value annotations over many weak ones.
-- Do NOT annotate every sentence.
-- Do NOT restate obvious text in the note.
-- Do NOT define common academic vocabulary that a technical reader would already know.
-- Do NOT create duplicate or overlapping annotations unless they serve clearly different purposes.
-- No two annotations may reference the same normalized "text_ref" on the same page.
-- Ground every annotation in the input passage only.
-- "text_ref" must be the shortest exact quote from the passage that supports the annotation.
-- "note" must be concise, specific, and helpful.
-- For highlights, explain significance rather than repeating the claim.
-- For notes, explain what is non-obvious, why it matters, or what follows from it.
+STRICT text_ref RULES
+"text_ref" must be the SHORTEST EXACT QUOTE from the passage that supports the annotation.
+
+This is critical:
+- Do NOT quote whole sentences if only a phrase is needed.
+- Do NOT include surrounding clauses unless they are necessary.
+- For definitions, text_ref should usually be only the term itself or the shortest noun phrase containing it.
+- For highlights, text_ref should usually be the exact claim/result sentence or the minimal clause containing the key claim.
+- For notes, text_ref should point to the exact phrase or sentence that needs explanation.
+
+Examples of good text_ref behavior:
+- Good: "spectral bias"
+- Bad: "Our model also exhibits spectral bias when trained on low-frequency signals."
+- Good: "outperformed prior baselines by 6.2%"
+- Bad: "In our experiments, the proposed method outperformed prior baselines by 6.2% on three benchmarks."
+- Good: "contrastive pretraining"
+- Bad: "We initialize the encoder with contrastive pretraining before fine-tuning on the downstream task."
+
+ANTI-NOISE RULES
+- Do NOT restate the obvious.
+- Do NOT define common academic words like "optimization", "baseline", "embedding", "classifier", unless the passage uses them in a highly specialized way.
+- Do NOT annotate generic background statements unless they are clearly central.
+- Do NOT create multiple annotations that say nearly the same thing.
+- Do NOT use note when the note is only a simpler paraphrase of the text.
+- Do NOT use definition for terms a generally technical reader would already know.
+- Do NOT annotate citations, section transitions, or generic framing language unless they contain a substantive claim.
+
+NOTE WRITING RULES
+- Be concise, specific, and informative.
+- Add value beyond paraphrase.
+- Prefer explaining significance, implication, assumption, comparison, or role in the paper.
 - For definitions, define the term in plain but technically accurate language.
-- For definitions, highlight only the defined term itself. Do not include adjacent verbs, punctuation, or explanatory clauses in "text_ref".
-- If a passage has little annotatable content, return a small number of annotations or an empty array.
+- For highlights, explain why the claim/result matters.
+- Avoid vague notes like:
+  - "This is important because it shows the method works."
+  - "This term is a method used in machine learning."
+  - "This means the authors got good results."
 
-Quality bar:
-A strong annotation should make a reader say: "That helped me understand something I would have missed."
+GOOD OUTPUT SHAPE
+- Usually 1-6 annotations for a short-to-medium passage
+- Return [] if the passage contains little worth annotating
+- It is better to miss a weak annotation than include a low-value one
 
-Return ONLY the JSON array. No prose, no markdown, no extra text.
+INTERNAL DECISION POLICY
+Before writing the final JSON, internally filter candidate annotations using these questions:
+1. Is this important for understanding the passage?
+2. Is this non-obvious or genuinely helpful?
+3. Is this grounded in a specific exact span?
+4. Is this worth showing to the target reader?
+
+Only keep annotations that are clearly useful.
+
+FINAL RULES
+- Return ONLY the JSON array
+- No markdown
+- No prose
+- No explanation outside the JSON
+- Every text_ref must be an exact substring from the passage
+- text_ref must be minimal and precise
+- No two objects may reuse the same normalized text_ref
+- For definitions, text_ref must be under 8 words unless a longer exact quote is absolutely necessary for understanding.
+- For notes and highlights, text_ref must be under 15 words unless a longer exact quote is absolutely necessary for understanding.
+- If a longer text_ref is truly necessary, keep only the minimum extra words needed.
+
+STYLE EXAMPLES
+Follow these example annotations as closely as possible once they are provided:
+""" + ANNOTATION_EXAMPLES + """
 """
 
 ANNOTATION_REPAIR_PROMPT = """You fix annotation outputs into valid JSON.
@@ -103,7 +294,43 @@ Return ONLY a JSON array of objects with this schema:
 { type: 'highlight' | 'note' | 'definition', text_ref: string, note: string, importance: 1 | 2 | 3 }
 Do not include markdown fences or prose.
 No two objects may reuse the same normalized text_ref.
-If type is 'definition', text_ref must be only the exact term being defined."""
+If type is 'definition', text_ref must be only the exact term being defined. If it isn't, adjust it to be.
+Definitions must use text_ref under 8 words unless absolutely necessary.
+Notes and highlights must use text_ref under 15 words unless absolutely necessary.
+If examples are present below, follow them closely:
+""" + ANNOTATION_EXAMPLES
+
+ANNOTATION_VALIDATION_PROMPT = """
+You are an annotation validation agent.
+
+You receive:
+1. page source text excerpts
+2. a JSON array of annotation objects
+
+Return ONLY a corrected JSON array of annotation objects with this exact schema:
+{ "type": "highlight" | "note" | "definition", "text_ref": string, "note": string, "importance": 1 | 2 | 3, "page_number": int }
+
+You may edit, shorten, deduplicate, or delete annotations.
+
+Validation rules:
+- Every text_ref must be an exact substring of the provided page excerpt for that page_number.
+- definition text_ref must be under 8 words unless a longer exact quote is absolutely necessary for understanding.
+- note and highlight text_ref must be under 15 words unless a longer exact quote is absolutely necessary for understanding.
+- When a longer text_ref is truly necessary, keep only the minimum extra words needed.
+- No two annotations may reuse the same normalized text_ref anywhere in the final array.
+- Normalize text_ref by lowercasing, trimming whitespace, collapsing internal whitespace, and stripping surrounding punctuation.
+- Prefer fewer, stronger annotations over many weak ones.
+- If two annotations conflict or duplicate each other, keep the more useful one.
+- Follow the example annotations below to the best of your ability.
+
+Important behavior:
+- Do not invent facts not grounded in the source excerpt.
+- Do not keep an annotation just because it already exists.
+- If an annotation cannot be made valid while staying useful, delete it.
+- Preserve the original meaning when possible, but prioritize rule compliance.
+
+Example annotations:
+""" + ANNOTATION_EXAMPLES
 
 SUMMARY_PROMPT = """
 You are an expert research assistant summarizing an academic paper for a technically literate reader.
@@ -424,7 +651,19 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 f"OpenAI annotation failed on page {chunk['page_number']} with model {model_name}: {error}"
             ) from error
 
-    return dedupe_annotations(annotations)
+    write_progress(
+        job_id,
+        {
+            "status": "running",
+            "stage": "validating",
+            "message": "Validating annotations...",
+            "currentChunk": len(chunks),
+            "totalChunks": len(chunks),
+        },
+    )
+    deduped_annotations = dedupe_annotations(annotations)
+    validated_annotations = validate_annotations(client, model_name, deduped_annotations, chunks)
+    return locally_validate_annotations(validated_annotations, chunks)
 
 
 def resolve_annotation_model(client: OpenAI, probe_text: str) -> str:
@@ -591,6 +830,90 @@ def repair_annotation_json(
     return repaired
 
 
+def validate_annotations(
+    client: OpenAI,
+    model_name: str,
+    annotations: list[Annotation],
+    chunks: list[dict],
+) -> list[Annotation]:
+    if not annotations:
+        return []
+
+    page_sources = build_page_sources(chunks)
+    validation_response = client.chat.completions.create(
+        model=model_name,
+        max_tokens=2200,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": ANNOTATION_VALIDATION_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Page source excerpts by page number:\n"
+                    f"{json.dumps(page_sources, ensure_ascii=True)}\n\n"
+                    "Annotations to validate:\n"
+                    f"{json.dumps([annotation.model_dump(mode='json') for annotation in annotations], ensure_ascii=True)}"
+                ),
+            },
+        ],
+    )
+
+    validated_text = extract_text_content(validation_response)
+    parsed = parse_annotation_json(validated_text)
+    if parsed is None:
+        logger.warning(
+            "Annotation validation agent returned non-JSON output; falling back to local validation. Raw preview: %.160r",
+            validated_text,
+        )
+        return annotations
+
+    validated_annotations: list[Annotation] = []
+    for item in parsed:
+        try:
+            validated_annotations.append(
+                Annotation(
+                    type=item["type"],
+                    text_ref=normalize_annotation_text_ref(item["text_ref"]),
+                    note=item["note"],
+                    importance=item["importance"],
+                    bbox=annotations_by_page_number(annotations, item["page_number"], item["text_ref"]),
+                    page_number=item["page_number"],
+                )
+            )
+        except Exception:
+            logger.warning("Skipping invalid validated annotation payload: %r", item, exc_info=True)
+
+    return validated_annotations or annotations
+
+
+def build_page_sources(chunks: list[dict]) -> dict[int, str]:
+    page_sources: dict[int, list[str]] = {}
+    for chunk in chunks:
+        page_sources.setdefault(chunk["page_number"], []).append(chunk["text"])
+
+    return {
+        page_number: "\n".join(texts)
+        for page_number, texts in page_sources.items()
+    }
+
+
+def annotations_by_page_number(
+    annotations: list[Annotation],
+    page_number: int,
+    text_ref: str,
+) -> BoundingBox:
+    normalized_text_ref = normalize_annotation_text_ref(text_ref)
+    for annotation in annotations:
+        if annotation.page_number == page_number and normalize_annotation_text_ref(annotation.text_ref) == normalized_text_ref:
+            return annotation.bbox
+
+    for annotation in annotations:
+        if annotation.page_number == page_number:
+            return annotation.bbox
+
+    return annotations[0].bbox
+
+
 def truncate_summary_source(full_text: str, limit: int = 12000) -> str:
     normalized = full_text.strip()
     if len(normalized) <= limit:
@@ -604,17 +927,127 @@ def normalize_annotation_text_ref(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def dedupe_annotations(annotations: list[Annotation]) -> list[Annotation]:
-    winners: dict[tuple[int, str], tuple[Annotation, int]] = {}
+def normalize_annotation_text_ref_key(value: str) -> str:
+    normalized = normalize_annotation_text_ref(value).lower()
+    return normalized.strip(" \t\n\r.,;:!?\"'`()[]{}")
 
-    for index, annotation in enumerate(annotations):
-        key = (annotation.page_number, normalize_annotation_text_ref(annotation.text_ref))
-        if not key[1]:
+
+def annotation_word_limit(annotation_type: str) -> int:
+    return 8 if annotation_type == "definition" else 15
+
+
+def text_ref_word_count(text_ref: str) -> int:
+    return len(re.findall(r"\S+", text_ref))
+
+
+def locally_validate_annotations(annotations: list[Annotation], chunks: list[dict]) -> list[Annotation]:
+    page_sources = build_page_sources(chunks)
+    candidates: list[Annotation] = []
+
+    for annotation in annotations:
+        page_text = page_sources.get(annotation.page_number, "")
+        annotation.text_ref = normalize_annotation_text_ref(annotation.text_ref)
+        annotation.note = annotation.note.strip()
+        if not annotation.text_ref or not annotation.note:
+            continue
+        if annotation.text_ref not in page_text:
+            continue
+
+        shortened_text_ref = shorten_text_ref(annotation, page_text)
+        if not shortened_text_ref:
+            continue
+
+        annotation.text_ref = shortened_text_ref
+        if text_ref_word_count(annotation.text_ref) >= annotation_word_limit(annotation.type):
+            continue
+
+        candidates.append(annotation)
+
+    winners: dict[str, tuple[Annotation, int]] = {}
+    for index, annotation in enumerate(candidates):
+        key = normalize_annotation_text_ref_key(annotation.text_ref)
+        if not key:
             continue
 
         current = winners.get(key)
         if current is None or annotation_rank(annotation, index) > annotation_rank(current[0], current[1]):
-            annotation.text_ref = key[1]
+            winners[key] = (annotation, index)
+
+    return [
+        annotation
+        for annotation, _ in sorted(
+            winners.values(),
+            key=lambda candidate: (candidate[0].page_number, candidate[1]),
+        )
+    ]
+
+
+def shorten_text_ref(annotation: Annotation, page_text: str) -> str | None:
+    text_ref = normalize_annotation_text_ref(annotation.text_ref)
+    limit = annotation_word_limit(annotation.type)
+    if text_ref_word_count(text_ref) < limit:
+        return text_ref
+
+    words = text_ref.split()
+    candidates = [text_ref]
+    if annotation.type == "definition":
+        candidates.extend(extract_definition_candidates(text_ref))
+    else:
+        candidates.extend(extract_ngram_candidates(words, limit - 1))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized_candidate = normalize_annotation_text_ref(candidate)
+        if normalized_candidate in seen:
+            continue
+        seen.add(normalized_candidate)
+        if not normalized_candidate or normalized_candidate not in page_text:
+            continue
+        if text_ref_word_count(normalized_candidate) < limit:
+            return normalized_candidate
+
+    return text_ref if text_ref_word_count(text_ref) < limit else None
+
+
+def extract_definition_candidates(text_ref: str) -> list[str]:
+    candidates: list[str] = []
+    stripped = text_ref.strip("()[]{}\"'.,;: ")
+    if stripped and stripped != text_ref:
+        candidates.append(stripped)
+
+    tokens = stripped.split()
+    for size in range(min(len(tokens), 7), 0, -1):
+        window = " ".join(tokens[:size]).strip("()[]{}\"'.,;: ")
+        if window:
+            candidates.append(window)
+
+    return sorted(candidates, key=lambda value: (text_ref_word_count(value), len(value)))
+
+
+def extract_ngram_candidates(words: list[str], max_words: int) -> list[str]:
+    candidates: list[str] = []
+    upper_bound = min(len(words), max_words)
+    for size in range(upper_bound, 0, -1):
+        for start in range(0, len(words) - size + 1):
+            candidate = " ".join(words[start : start + size]).strip("()[]{}\"'.,;: ")
+            if candidate:
+                candidates.append(candidate)
+
+    return sorted(candidates, key=lambda value: (text_ref_word_count(value), len(value)))
+
+
+def dedupe_annotations(annotations: list[Annotation]) -> list[Annotation]:
+    winners: dict[str, tuple[Annotation, int]] = {}
+
+    for index, annotation in enumerate(annotations):
+        normalized_text_ref = normalize_annotation_text_ref(annotation.text_ref)
+        key = normalize_annotation_text_ref_key(normalized_text_ref)
+        if not key:
+            continue
+
+        current = winners.get(key)
+        if current is None or annotation_rank(annotation, index) > annotation_rank(current[0], current[1]):
+            annotation.text_ref = normalized_text_ref
             winners[key] = (annotation, index)
 
     return [
