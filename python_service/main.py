@@ -214,6 +214,8 @@ Use for:
 - technical terms a non-expert in the subfield likely would not know
 
 A definition should explain the term briefly and in the context of this passage.
+The note for a definition must explicitly include the defined term itself so the popup makes sense out of context.
+Preferred format: "<TERM>: <brief explanation>".
 
 IMPORTANCE RUBRIC
 - 3 = essential for understanding this passage; central claim/result/method or essential technical term
@@ -254,6 +256,7 @@ NOTE WRITING RULES
 - Add value beyond paraphrase.
 - Prefer explaining significance, implication, assumption, comparison, or role in the paper.
 - For definitions, define the term in plain but technically accurate language.
+- For definitions, begin the note by naming the exact term from text_ref, then define it.
 - For highlights, explain why the claim/result matters.
 - Avoid vague notes like:
   - "This is important because it shows the method works."
@@ -297,6 +300,7 @@ Return ONLY a JSON array of objects with this schema:
 Do not include markdown fences or prose.
 No two objects may reuse the same normalized text_ref.
 If type is 'definition', text_ref must be only the exact term being defined. If it isn't, adjust it to be.
+If type is 'definition', rewrite note so it begins with the defined term from text_ref, for example: "Transformer: a neural architecture based on attention mechanisms."
 Definitions must use text_ref under 5 words unless absolutely necessary.
 Notes and highlights must use text_ref under 15 words unless absolutely necessary.
 If examples are present below, follow them closely:

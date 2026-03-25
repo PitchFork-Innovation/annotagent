@@ -16,8 +16,8 @@ type Props = {
 
 type PopupState = {
   annotation: AnnotationRecord;
-  x: number;
-  y: number;
+  anchorX: number;
+  anchorY: number;
 } | null;
 
 type IngestProgress = {
@@ -238,7 +238,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
             const pageAnnotations = annotationsByPage[pageNumber] ?? [];
 
             return (
-              <section key={pageNumber} className="relative overflow-hidden rounded-[1.5rem] bg-white shadow-float">
+              <section key={pageNumber} className="relative overflow-visible rounded-[1.5rem] bg-white shadow-float">
                 <div className="flex items-center justify-between px-3 pb-2 pt-3">
                   <span className="text-xs uppercase tracking-[0.25em] text-night/40">Page {pageNumber}</span>
                   <span className="text-xs text-night/50">{pageAnnotations.length} annotations</span>
@@ -247,7 +247,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
                   ref={(node) => {
                     pageRefs.current[pageNumber] = node;
                   }}
-                  className="relative mx-auto w-fit max-w-full"
+                  className="relative mx-auto w-fit max-w-full overflow-visible"
                 >
                   <Page
                     pageNumber={pageNumber}
@@ -262,10 +262,29 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
                         return pageRefs.current[pageNumber] ?? null;
                       }
                     }}
-                    onOpen={(annotation, coords) => setActivePopup({ annotation, ...coords })}
+                    onOpen={(annotation, coords) => {
+                      const pageRoot = pageRefs.current[pageNumber];
+                      if (!pageRoot) {
+                        return;
+                      }
+
+                      setActivePopup({
+                        annotation,
+                        anchorX: coords.x,
+                        anchorY: coords.y
+                      });
+                    }}
                   />
                   {activePopup?.annotation.pageNumber === pageNumber ? (
-                    <AnnotationPopup popup={activePopup} onClose={() => setActivePopup(null)} />
+                    <AnnotationPopup
+                      pageRootRef={{
+                        get current() {
+                          return pageRefs.current[pageNumber] ?? null;
+                        }
+                      }}
+                      popup={activePopup}
+                      onClose={() => setActivePopup(null)}
+                    />
                   ) : null}
                 </div>
               </section>
@@ -287,6 +306,7 @@ function AnnotationOverlay({
   onOpen: (annotation: AnnotationRecord, coords: { x: number; y: number }) => void;
 }) {
   const [layouts, setLayouts] = useState<Record<string, ResolvedAnnotationLayout>>({});
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -331,14 +351,19 @@ function AnnotationOverlay({
     };
   }, [annotations, pageRootRef]);
 
+  const overlapLanes = useMemo(() => assignOverlapLanes(annotations, layouts), [annotations, layouts]);
+
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
       {annotations.map((annotation) => (
         <AnnotationHighlight
           key={annotation.id}
+          active={activeAnnotationId === annotation.id}
           annotation={annotation}
           layout={layouts[annotation.id]}
+          lane={overlapLanes[annotation.id] ?? 0}
           onOpen={(coords) => onOpen(annotation, coords)}
+          onActiveChange={(isActive) => setActiveAnnotationId(isActive ? annotation.id : null)}
         />
       ))}
     </div>
@@ -367,17 +392,24 @@ type HighlightFragment = {
 };
 
 function AnnotationHighlight({
+  active,
   annotation,
   layout,
-  onOpen
+  lane,
+  onOpen,
+  onActiveChange
 }: {
+  active: boolean;
   annotation: AnnotationRecord;
   layout?: ResolvedAnnotationLayout;
+  lane: number;
   onOpen: (coords: { x: number; y: number }) => void;
+  onActiveChange: (isActive: boolean) => void;
 }) {
   const tone = annotationTone(annotation.type);
   const style = importanceStyle(annotation.importance);
   const resolvedLayout = layout ?? createFallbackLayout(annotation.bbox);
+  const laneOffset = lane * 0.008;
 
   return (
     <>
@@ -385,20 +417,25 @@ function AnnotationHighlight({
         <button
           key={`${annotation.id}-${index}`}
           aria-label={`${annotation.type}: ${annotation.textRef}`}
-          className="pointer-events-auto absolute z-10 cursor-pointer rounded-[4px] transition-transform hover:scale-[1.01]"
+          className="pointer-events-auto absolute cursor-pointer rounded-[4px] transition-transform hover:scale-[1.01] focus:scale-[1.01]"
           style={{
             left: `${fragment.x * 100}%`,
-            top: `${fragment.y * 100}%`,
+            top: `${(fragment.y + laneOffset) * 100}%`,
             width: `${fragment.width * 100}%`,
-            height: `${fragment.height * 100}%`
+            height: `${fragment.height * 100}%`,
+            zIndex: active ? 30 : 10 + lane
           }}
           title={annotation.note}
           type="button"
+          onMouseEnter={() => onActiveChange(true)}
+          onMouseLeave={() => onActiveChange(false)}
+          onFocus={() => onActiveChange(true)}
+          onBlur={() => onActiveChange(false)}
           onClick={(event) => {
             event.stopPropagation();
             onOpen({
               x: resolvedLayout.anchorX,
-              y: resolvedLayout.anchorY
+              y: resolvedLayout.anchorY + laneOffset
             });
           }}
         >
@@ -406,14 +443,15 @@ function AnnotationHighlight({
             className="absolute inset-0 rounded-[4px]"
             style={{
               backgroundColor: tone,
-              opacity: style.fillOpacity
+              opacity: active ? Math.min(style.fillOpacity + 0.08, 0.35) : style.fillOpacity
             }}
           />
           <span
             className="absolute inset-0 rounded-[4px] border"
             style={{
               borderColor: tone,
-              opacity: style.borderOpacity
+              opacity: active ? 0.95 : style.borderOpacity,
+              borderWidth: active ? 2 : 1
             }}
           />
           {index === 0 ? <span className="sr-only">{annotation.type}</span> : null}
@@ -424,36 +462,143 @@ function AnnotationHighlight({
 }
 
 function AnnotationPopup({
+  pageRootRef,
   popup,
   onClose
 }: {
+  pageRootRef: RefObject<HTMLDivElement | null>;
   popup: NonNullable<PopupState>;
   onClose: () => void;
 }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const [, setViewportTick] = useState(0);
   const tone = annotationTone(popup.annotation.type);
-  const left = Math.min(Math.max(popup.x * 100, 16), 84);
-  const top = Math.max(popup.y * 100 - 12, 3);
+
+  useEffect(() => {
+    let frameId = 0;
+
+    const updatePosition = () => {
+      frameId = 0;
+      setViewportTick((value) => value + 1);
+    };
+
+    const requestUpdate = () => {
+      if (frameId !== 0) {
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(updatePosition);
+    };
+
+    window.addEventListener("scroll", requestUpdate, { passive: true });
+    window.addEventListener("resize", requestUpdate);
+
+    return () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+      window.removeEventListener("scroll", requestUpdate);
+      window.removeEventListener("resize", requestUpdate);
+    };
+  }, []);
+
+  const pageRoot = pageRootRef.current;
+  if (!pageRoot) {
+    return null;
+  }
+
+  const pageRect = pageRoot.getBoundingClientRect();
+  const viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
+  const anchorLeft = pageRect.left + popup.anchorX * pageRect.width;
+  const anchorTop = pageRect.top + popup.anchorY * pageRect.height;
+  const side = anchorLeft > (pageRect.left + pageRect.right) / 2 ? "left" : "right";
+  const cardWidth = Math.min(320, viewportWidth - 32);
+  const edgeGap = 20;
+  const cardGap = 28;
+  const lineEndX =
+    side === "right"
+      ? Math.min(pageRect.right + cardGap, viewportWidth - cardWidth - edgeGap)
+      : Math.max(pageRect.left - cardGap, cardWidth + edgeGap);
+  const cardLeft =
+    side === "right"
+      ? Math.min(lineEndX, viewportWidth - cardWidth - edgeGap)
+      : Math.max(lineEndX - cardWidth, edgeGap);
+  const connectorLeft = Math.min(anchorLeft, side === "right" ? cardLeft : cardLeft + cardWidth);
+  const connectorWidth = Math.abs((side === "right" ? cardLeft : cardLeft + cardWidth) - anchorLeft);
+  const top = Math.min(Math.max(anchorTop - 42, 16), viewportHeight - 180);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => setIsVisible(true));
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, []);
 
   return (
-    <aside
-      className="absolute z-20 w-[320px] max-w-[calc(100vw-48px)] -translate-x-1/2 rounded-2xl border border-black/10 bg-white p-4 shadow-float"
-      data-annotation-popup
-      style={{
-        left: `${left}%`,
-        top: `${top}%`
-      }}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <span className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: tone, backgroundColor: `${tone}16` }}>
-          {popup.annotation.type === "highlight" ? "Key Result" : popup.annotation.type}
-        </span>
-        <span className="text-xs text-night/45">Importance {popup.annotation.importance}</span>
+    <div className="pointer-events-none fixed inset-0 z-30 overflow-visible" data-annotation-popup>
+      <div
+        aria-hidden="true"
+        className="absolute"
+        style={{
+          top: `${anchorTop}px`,
+          left: `${connectorLeft}px`,
+          width: `${Math.max(connectorWidth, 18)}px`,
+          height: "2px",
+          transformOrigin: side === "right" ? "left center" : "right center",
+          transform: isVisible ? "scaleX(1)" : "scaleX(0)",
+          transition: "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)"
+        }}
+      >
+        <span
+          className="absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full border border-white/70 shadow-sm"
+          style={{
+            left: side === "right" ? "-0.18rem" : undefined,
+            right: side === "left" ? "-0.18rem" : undefined,
+            backgroundColor: tone
+          }}
+        />
+        <span
+          className="absolute inset-y-0 rounded-full"
+          style={{
+            left: 0,
+            right: 0,
+            background: `linear-gradient(${side === "right" ? "90deg" : "270deg"}, ${tone}, ${tone}55)`
+          }}
+        />
+        <span
+          className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rotate-45 border-t-2 border-r-2"
+          style={{
+            [side === "right" ? "right" : "left"]: "-0.2rem",
+            borderColor: tone
+          }}
+        />
       </div>
-      <RichText content={popup.annotation.note} className="mt-4 text-sm leading-6 text-night" />
-      <button className="mt-4 text-sm font-medium text-night/65" onClick={onClose} type="button">
-        Dismiss
-      </button>
-    </aside>
+      <aside
+        className="pointer-events-auto absolute z-20 w-[320px] max-w-[calc(100vw-64px)] rounded-[1.7rem] border border-black/10 bg-white/96 p-4 shadow-float backdrop-blur"
+        style={{
+          top: `${top}px`,
+          left: `${cardLeft}px`,
+          width: `${cardWidth}px`,
+          opacity: isVisible ? 1 : 0,
+          transform: isVisible
+            ? "scale(1)"
+            : `${side === "right" ? "translateX(-12px)" : "translateX(12px)"} scale(0.96)`,
+          transition: "opacity 180ms ease 140ms, transform 260ms cubic-bezier(0.22, 1, 0.36, 1) 140ms"
+        }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: tone, backgroundColor: `${tone}16` }}>
+            {popup.annotation.type === "highlight" ? "Key Result" : popup.annotation.type}
+          </span>
+          <span className="text-xs text-night/45">Importance {popup.annotation.importance}</span>
+        </div>
+        <RichText content={popup.annotation.note} className="mt-4 text-sm leading-6 text-night" />
+        <button className="mt-4 text-sm font-medium text-night/65" onClick={onClose} type="button">
+          Dismiss
+        </button>
+      </aside>
+    </div>
   );
 }
 
@@ -573,11 +718,12 @@ function buildResolvedLayout(fragments: HighlightFragment[]): ResolvedAnnotation
   const left = Math.min(...fragments.map((fragment) => fragment.x));
   const top = Math.min(...fragments.map((fragment) => fragment.y));
   const right = Math.max(...fragments.map((fragment) => fragment.x + fragment.width));
+  const bottom = Math.max(...fragments.map((fragment) => fragment.y + fragment.height));
 
   return {
     fragments,
     anchorX: (left + right) / 2,
-    anchorY: top
+    anchorY: (top + bottom) / 2
   };
 }
 
@@ -590,6 +736,69 @@ function createFallbackLayout(bbox: AnnotationRecord["bbox"]): ResolvedAnnotatio
       height: bbox.height
     }
   ]);
+}
+
+function assignOverlapLanes(
+  annotations: AnnotationRecord[],
+  layouts: Record<string, ResolvedAnnotationLayout>
+): Record<string, number> {
+  const positioned = annotations.map((annotation) => ({
+    id: annotation.id,
+    bounds: getLayoutBounds(layouts[annotation.id] ?? createFallbackLayout(annotation.bbox))
+  }));
+
+  positioned.sort((left, right) => {
+    if (left.bounds.top !== right.bounds.top) {
+      return left.bounds.top - right.bounds.top;
+    }
+
+    return left.bounds.left - right.bounds.left;
+  });
+
+  const laneMap: Record<string, number> = {};
+  const activeGroups: Array<{ lane: number; bounds: LayoutBounds }> = [];
+
+  for (const item of positioned) {
+    for (let index = activeGroups.length - 1; index >= 0; index -= 1) {
+      if (activeGroups[index].bounds.bottom < item.bounds.top - 0.004) {
+        activeGroups.splice(index, 1);
+      }
+    }
+
+    let lane = 0;
+    while (
+      activeGroups.some((group) => group.lane === lane && boundsOverlap(group.bounds, item.bounds))
+    ) {
+      lane += 1;
+    }
+
+    laneMap[item.id] = lane;
+    activeGroups.push({ lane, bounds: item.bounds });
+  }
+
+  return laneMap;
+}
+
+type LayoutBounds = {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+};
+
+function getLayoutBounds(layout: ResolvedAnnotationLayout): LayoutBounds {
+  const left = Math.min(...layout.fragments.map((fragment) => fragment.x));
+  const right = Math.max(...layout.fragments.map((fragment) => fragment.x + fragment.width));
+  const top = Math.min(...layout.fragments.map((fragment) => fragment.y));
+  const bottom = Math.max(...layout.fragments.map((fragment) => fragment.y + fragment.height));
+
+  return { top, bottom, left, right };
+}
+
+function boundsOverlap(left: LayoutBounds, right: LayoutBounds) {
+  const verticalOverlap = left.top <= right.bottom && right.top <= left.bottom;
+  const horizontalOverlap = left.left <= right.right && right.left <= left.right;
+  return verticalOverlap && horizontalOverlap;
 }
 
 function normalizeText(value: string) {
