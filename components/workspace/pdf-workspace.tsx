@@ -502,6 +502,13 @@ function AnnotationPopup({
     };
   }, []);
 
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => setIsVisible(true));
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, []);
+
   const pageRoot = pageRootRef.current;
   if (!pageRoot) {
     return null;
@@ -527,13 +534,6 @@ function AnnotationPopup({
   const connectorLeft = Math.min(anchorLeft, side === "right" ? cardLeft : cardLeft + cardWidth);
   const connectorWidth = Math.abs((side === "right" ? cardLeft : cardLeft + cardWidth) - anchorLeft);
   const top = Math.min(Math.max(anchorTop - 42, 16), viewportHeight - 180);
-
-  useEffect(() => {
-    const frameId = window.requestAnimationFrame(() => setIsVisible(true));
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, []);
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 overflow-visible" data-annotation-popup>
