@@ -43,7 +43,7 @@
 - `/api/papers/[paperId]`
   - GET paper workspace JSON
 - `/api/papers/[paperId]/pdf`
-  - GET proxied PDF bytes from cached Supabase URL or arXiv fallbacks
+  - GET proxied PDF bytes from cached Supabase storage when available, otherwise arXiv-based fallbacks
 - `/api/papers/[paperId]/reprocess`
   - POST with optional `jobId`
   - requires authenticated user and linked paper
@@ -75,7 +75,7 @@
 - New route, existing business logic: keep the route thin and call a helper in `lib/server-data.ts`.
 - New data on the paper page: update the DB read in `getPaperWorkspace`, then `lib/types.ts`, then the UI.
 - New ingest-side payload field: update both the Python return shape and TypeScript `IngestionPayload`.
-- PDF retrieval changes must preserve the current fallback chain and PDF content-type validation.
+- PDF retrieval changes must preserve authenticated paper access, the cached-storage-first lookup, and PDF content-type validation for network fallbacks.
 
 ## Verification
 - `npm run lint`

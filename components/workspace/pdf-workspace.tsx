@@ -91,6 +91,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
       return acc;
     }, {});
   }, [workspace.annotations]);
+  const pdfDocumentOptions = useMemo(() => ({ withCredentials: true }), []);
   const summaryContent = workspace.paper.aiSummary ?? workspace.paper.abstract;
 
   async function onReprocess() {
@@ -226,6 +227,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         <Document
           file={pdfFileUrl}
           loading={<PaperCard label="Loading PDF..." />}
+          options={pdfDocumentOptions}
           onLoadError={(error) => setPdfError(error.message)}
           onSourceError={(error) => setPdfError(error.message)}
           onLoadSuccess={({ numPages }) => {
