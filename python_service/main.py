@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import tempfile
+import time
+from collections import Counter
 from pathlib import Path
 from typing import Literal
 
@@ -44,6 +46,9 @@ SUMMARY_MODELS = [
     if model.strip()
 ]
 ANNOTATION_REQUEST_TIMEOUT = float(os.getenv("OPENAI_ANNOTATION_TIMEOUT_SECONDS", "45"))
+ARXIV_METADATA_DELAY_SECONDS = float(os.getenv("ARXIV_METADATA_DELAY_SECONDS", "3.0"))
+ARXIV_METADATA_RETRIES = int(os.getenv("ARXIV_METADATA_RETRIES", "6"))
+ARXIV_METADATA_BACKOFF_SECONDS = float(os.getenv("ARXIV_METADATA_BACKOFF_SECONDS", "5.0"))
 
 ANNOTATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
@@ -81,7 +86,7 @@ Note writing rules:
 - add significance, implication, assumption, comparison, or role in the paper
 - do not merely paraphrase the quoted text
 - definition notes must begin with the exact term from text_ref in the form "<TERM>: <brief explanation>"
-- highlight notes should explain why the claim or result matters
+- highlight notes should explain why the claim or result matters, DO NOT JUST DESCRIBE EFFECTIVENESS WITHOUT SPECIFIC CONTEXT
 
 Anti-noise rules:
 - do not annotate every sentence
@@ -98,7 +103,7 @@ ANNOTATION_FEWSHOT_EXAMPLES = [
             {
                 "type": "highlight",
                 "text_ref": "reduces inference latency by 43%",
-                "note": "This is a key quantitative result showing a large practical speed improvement without sacrificing accuracy.",
+                "note": "Moves the Pareto frontier of latency vs accuracy, indicating a genuine algorithmic or architectural improvement rather than a simple engineering optimization.",
                 "importance": 3,
             }
         ],
@@ -109,7 +114,7 @@ ANNOTATION_FEWSHOT_EXAMPLES = [
             {
                 "type": "note",
                 "text_ref": "fixed compute budget",
-                "note": "This makes the comparison fair, so the gains are not explained by using more compute than the baselines.",
+                "note": "The new architecture prescribes a method to outperform state-of-the-art models without increasing cost.",
                 "importance": 2,
             }
         ],
@@ -323,14 +328,14 @@ Validation requirements:
 
 
 def dump_prompt_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True, indent=2)
+    return json.dumps(sanitize_prompt_value(value), ensure_ascii=True, indent=2)
 
 
 def build_annotation_request_content(passage: str) -> str:
     return (
         "Annotate the following academic passage.\n"
         "Return only a JSON array matching the required schema.\n\n"
-        f"Passage:\n{passage}"
+        f"Passage:\n{sanitize_prompt_text(passage)}"
     )
 
 
@@ -347,9 +352,9 @@ def build_annotation_messages(passage: str) -> list[dict[str, str]]:
 def build_repair_request_content(source_text: str, bad_output: str) -> str:
     return (
         "Original passage:\n"
-        f"{source_text[:2000]}\n\n"
+        f"{sanitize_prompt_text(source_text)[:2000]}\n\n"
         "Broken annotation output:\n"
-        f"{bad_output or '[empty response]'}"
+        f"{sanitize_prompt_text(bad_output or '[empty response]')}"
     )
 
 
@@ -413,6 +418,14 @@ Rules:
 
 class IngestRequest(BaseModel):
     arxiv_id: str = Field(min_length=4)
+    job_id: str | None = None
+
+
+class ReprocessRequest(BaseModel):
+    arxiv_id: str = Field(min_length=4)
+    title: str = Field(min_length=1)
+    abstract: str = ""
+    pdf_url: str = Field(min_length=1)
     job_id: str | None = None
 
 
@@ -484,65 +497,30 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     logger.info("Resolving arXiv paper metadata for %s", normalized_arxiv_id)
     paper = resolve_arxiv_paper(normalized_arxiv_id)
 
-    write_progress(request.job_id, {"status": "running", "stage": "fetching_pdf", "message": "Fetching PDF from arXiv..."})
-    logger.info("Fetching PDF bytes from %s", paper.pdf_url)
-    pdf_bytes = await fetch_pdf_bytes(paper.pdf_url)
-
-    write_progress(request.job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
-    logger.info("Opening PDF with PyMuPDF for %s", normalized_arxiv_id)
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    write_progress(request.job_id, {"status": "running", "stage": "extracting_blocks", "message": "Extracting text blocks from PDF..."})
-    logger.info("Extracting text blocks for %s", normalized_arxiv_id)
-    blocks = extract_blocks(pdf_doc)
-    full_text = "\n\n".join(block["text"] for block in blocks)
-
-    write_progress(request.job_id, {"status": "running", "stage": "summarizing", "message": "Generating AI key points..."})
-    logger.info("Generating paper summary for %s", normalized_arxiv_id)
-    summary = summarize_paper(paper.title, paper.summary, full_text)
-
-    write_progress(request.job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
-    logger.info("Chunking extracted text for %s", normalized_arxiv_id)
-    chunks = chunk_blocks(blocks)
-    logger.info(
-        "Extracted %s blocks and %s chunks for %s",
-        len(blocks),
-        len(chunks),
-        normalized_arxiv_id,
-    )
-    write_progress(
-        request.job_id,
-        {
-            "status": "running",
-            "stage": "annotating",
-            "message": "Generating annotations with OpenAI...",
-            "currentChunk": 0,
-            "totalChunks": len(chunks),
-        },
-    )
-    annotations = annotate_chunks(chunks, request.job_id)
-    logger.info("Produced %s annotations for %s", len(annotations), normalized_arxiv_id)
-    write_progress(
-        request.job_id,
-        {
-            "status": "completed",
-            "stage": "completed",
-            "message": "Annotation generation complete.",
-            "currentChunk": len(chunks),
-            "totalChunks": len(chunks),
-        },
-    )
-
-    return IngestResponse(
-        arxivId=normalized_arxiv_id,
+    return await run_annotation_pipeline(
+        arxiv_id=normalized_arxiv_id,
         title=paper.title,
         abstract=paper.summary,
-        summary=summary,
-        pdfUrl=paper.pdf_url,
-        fullText=full_text,
-        pageCount=pdf_doc.page_count,
-        starterQuestions=build_starter_questions(paper.title),
-        annotations=annotations,
+        pdf_url=paper.pdf_url,
+        job_id=request.job_id,
+        pdf_progress_message="Fetching PDF from arXiv...",
+        pdf_source_label="arXiv",
+    )
+
+
+@app.post("/reprocess", response_model=IngestResponse)
+async def reprocess(request: ReprocessRequest) -> IngestResponse:
+    normalized_arxiv_id = normalize_arxiv_id(request.arxiv_id)
+    logger.info("Starting annotation reprocess for arXiv ID %s", normalized_arxiv_id)
+
+    return await run_annotation_pipeline(
+        arxiv_id=normalized_arxiv_id,
+        title=request.title,
+        abstract=request.abstract,
+        pdf_url=request.pdf_url,
+        job_id=request.job_id,
+        pdf_progress_message="Fetching cached PDF...",
+        pdf_source_label="cached storage",
     )
 
 
@@ -559,12 +537,51 @@ def normalize_arxiv_id(arxiv_id: str) -> str:
 
 
 def resolve_arxiv_paper(arxiv_id: str):
-    client = arxiv.Client()
+    client = arxiv.Client(
+        page_size=1,
+        delay_seconds=ARXIV_METADATA_DELAY_SECONDS,
+        num_retries=1,
+    )
     search = arxiv.Search(id_list=[arxiv_id], max_results=1)
-    results = list(client.results(search))
-    if not results:
-        raise HTTPException(status_code=404, detail="arXiv paper not found")
-    return results[0]
+    last_rate_limit_error: arxiv.HTTPError | None = None
+
+    for attempt in range(1, ARXIV_METADATA_RETRIES + 1):
+        try:
+            results = list(client.results(search))
+            if not results:
+                raise HTTPException(status_code=404, detail="arXiv paper not found")
+            return results[0]
+        except arxiv.HTTPError as error:
+            if not is_arxiv_rate_limit_error(error):
+                raise
+
+            last_rate_limit_error = error
+            if attempt == ARXIV_METADATA_RETRIES:
+                break
+
+            sleep_seconds = ARXIV_METADATA_BACKOFF_SECONDS * attempt
+            logger.warning(
+                "arXiv metadata lookup hit HTTP 429 for %s on attempt %s/%s; retrying in %.1fs",
+                arxiv_id,
+                attempt,
+                ARXIV_METADATA_RETRIES,
+                sleep_seconds,
+            )
+            time.sleep(sleep_seconds)
+
+    logger.error(
+        "arXiv metadata lookup exhausted retries for %s after repeated HTTP 429 responses: %s",
+        arxiv_id,
+        last_rate_limit_error,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="arXiv rate limited the metadata lookup. Please wait a minute and try again.",
+    )
+
+
+def is_arxiv_rate_limit_error(error: arxiv.HTTPError) -> bool:
+    return "HTTP 429" in str(error)
 
 
 async def fetch_pdf_bytes(pdf_url: str) -> bytes:
@@ -572,6 +589,78 @@ async def fetch_pdf_bytes(pdf_url: str) -> bytes:
         response = await client.get(pdf_url)
         response.raise_for_status()
         return response.content
+
+
+async def run_annotation_pipeline(
+    *,
+    arxiv_id: str,
+    title: str,
+    abstract: str,
+    pdf_url: str,
+    job_id: str | None,
+    pdf_progress_message: str,
+    pdf_source_label: str,
+) -> IngestResponse:
+    write_progress(job_id, {"status": "running", "stage": "fetching_pdf", "message": pdf_progress_message})
+    logger.info("Fetching PDF bytes from %s for %s", pdf_source_label, arxiv_id)
+    pdf_bytes = await fetch_pdf_bytes(pdf_url)
+
+    write_progress(job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
+    logger.info("Opening PDF with PyMuPDF for %s", arxiv_id)
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    write_progress(job_id, {"status": "running", "stage": "extracting_blocks", "message": "Extracting text blocks from PDF..."})
+    logger.info("Extracting text blocks for %s", arxiv_id)
+    blocks = extract_blocks(pdf_doc)
+    full_text = "\n\n".join(block["text"] for block in blocks)
+
+    write_progress(job_id, {"status": "running", "stage": "summarizing", "message": "Generating AI key points..."})
+    logger.info("Generating paper summary for %s", arxiv_id)
+    summary = summarize_paper(title, abstract, full_text)
+
+    write_progress(job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
+    logger.info("Chunking extracted text for %s", arxiv_id)
+    chunks = chunk_blocks(blocks)
+    logger.info(
+        "Extracted %s blocks and %s chunks for %s",
+        len(blocks),
+        len(chunks),
+        arxiv_id,
+    )
+    write_progress(
+        job_id,
+        {
+            "status": "running",
+            "stage": "annotating",
+            "message": "Generating annotations with OpenAI...",
+            "currentChunk": 0,
+            "totalChunks": len(chunks),
+        },
+    )
+    annotations = annotate_chunks(chunks, job_id)
+    logger.info("Produced %s annotations for %s", len(annotations), arxiv_id)
+    write_progress(
+        job_id,
+        {
+            "status": "completed",
+            "stage": "completed",
+            "message": "Annotation generation complete.",
+            "currentChunk": len(chunks),
+            "totalChunks": len(chunks),
+        },
+    )
+
+    return IngestResponse(
+        arxivId=arxiv_id,
+        title=title,
+        abstract=abstract,
+        summary=summary,
+        pdfUrl=pdf_url,
+        fullText=full_text,
+        pageCount=pdf_doc.page_count,
+        starterQuestions=build_starter_questions(title),
+        annotations=annotations,
+    )
 
 
 def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
@@ -602,17 +691,33 @@ def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
 
 
 def sanitize_extracted_text(text: str) -> str:
+    return sanitize_prompt_text(text)
+
+
+def sanitize_prompt_text(text: str) -> str:
     filtered: list[str] = []
     for char in text:
         code_point = ord(char)
         if char in "\n\r\t":
             filtered.append(char)
             continue
-        if code_point < 32 or 0xD800 <= code_point <= 0xDFFF:
+        if code_point < 32 or 0x7F <= code_point <= 0x9F or 0xD800 <= code_point <= 0xDFFF:
+            continue
+        if 0xFDD0 <= code_point <= 0xFDEF or (code_point & 0xFFFE) == 0xFFFE:
             continue
         filtered.append(char)
 
     return "".join(filtered)
+
+
+def sanitize_prompt_value(value: object) -> object:
+    if isinstance(value, str):
+        return sanitize_prompt_text(value)
+    if isinstance(value, list):
+        return [sanitize_prompt_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: sanitize_prompt_value(item) for key, item in value.items()}
+    return value
 
 
 def chunk_blocks(blocks: list[dict]) -> list[dict]:
@@ -688,6 +793,14 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 chunk["page_number"],
                 chunk["text"],
             )
+            logger.info(
+                "Chunk %s/%s on page %s produced %s raw annotations: %s",
+                index,
+                len(chunks),
+                chunk["page_number"],
+                len(parsed),
+                format_annotation_debug_items(parsed),
+            )
             for item in parsed:
                 normalized_text_ref = normalize_annotation_text_ref(item["text_ref"])
                 if not normalized_text_ref:
@@ -727,30 +840,51 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
             "totalChunks": len(chunks),
         },
     )
+    logger.info("Collected %s annotations before dedupe: %s", len(annotations), summarize_annotations(annotations))
     deduped_annotations = dedupe_annotations(annotations)
+    logger.info(
+        "After dedupe: %s annotations remain (%s removed): %s",
+        len(deduped_annotations),
+        len(annotations) - len(deduped_annotations),
+        summarize_annotations(deduped_annotations),
+    )
     validated_annotations = validate_annotations(client, model_name, deduped_annotations, chunks)
-    return locally_validate_annotations(validated_annotations, chunks)
+    logger.info(
+        "After LLM validation: %s annotations remain: %s",
+        len(validated_annotations),
+        summarize_annotations(validated_annotations),
+    )
+    final_annotations = locally_validate_annotations(validated_annotations, chunks)
+    logger.info(
+        "After local validation: %s annotations remain (%s removed): %s",
+        len(final_annotations),
+        len(validated_annotations) - len(final_annotations),
+        summarize_annotations(final_annotations),
+    )
+    return final_annotations
 
 
 def resolve_annotation_model(client: OpenAI, probe_text: str) -> str:
+    safe_probe_text = sanitize_prompt_text(probe_text)
     return resolve_chat_model(
         client,
         ANNOTATION_MODELS,
         [
             {"role": "system", "content": "Reply with []"},
-            {"role": "user", "content": probe_text[:200] or "Test"},
+            {"role": "user", "content": safe_probe_text[:200] or "Test"},
         ],
         "annotation",
     )
 
 
 def resolve_summary_model(client: OpenAI, probe_text: str) -> str:
+    safe_probe_text = sanitize_prompt_text(probe_text)
     return resolve_chat_model(
         client,
         SUMMARY_MODELS,
         [
             {"role": "system", "content": "Reply with ok"},
-            {"role": "user", "content": probe_text[:200] or "Test"},
+            {"role": "user", "content": safe_probe_text[:200] or "Test"},
         ],
         "summary",
     )
@@ -895,40 +1029,58 @@ def validate_annotations(
         return []
 
     page_sources = build_page_sources(chunks)
-    validation_response = client.chat.completions.create(
-        model=model_name,
-        max_completion_tokens=2200,
-        temperature=0,
-        messages=build_annotation_validation_messages(
-            page_sources,
-            [annotation.model_dump(mode="json") for annotation in annotations],
-        ),
-    )
-
-    validated_text = extract_text_content(validation_response)
-    parsed = parse_annotation_json(validated_text)
-    if parsed is None:
-        logger.warning(
-            "Annotation validation agent returned non-JSON output; falling back to local validation. Raw preview: %.160r",
-            validated_text,
-        )
-        return annotations
-
     validated_annotations: list[Annotation] = []
-    for item in parsed:
-        try:
-            validated_annotations.append(
-                Annotation(
-                    type=item["type"],
-                    text_ref=normalize_annotation_text_ref(item["text_ref"]),
-                    note=item["note"],
-                    importance=item["importance"],
-                    bbox=annotations_by_page_number(annotations, item["page_number"], item["text_ref"]),
-                    page_number=item["page_number"],
-                )
+    for page_number, page_annotations in annotations_grouped_by_page(annotations).items():
+        page_source = page_sources.get(page_number, "")
+        logger.info(
+            "Validating page %s with %s candidate annotations",
+            page_number,
+            len(page_annotations),
+        )
+        validation_response = client.chat.completions.create(
+            model=model_name,
+            max_completion_tokens=1800,
+            temperature=0,
+            messages=build_annotation_validation_messages(
+                {page_number: page_source},
+                [annotation.model_dump(mode="json") for annotation in page_annotations],
+            ),
+        )
+
+        validated_text = extract_text_content(validation_response)
+        parsed = parse_annotation_json(validated_text)
+        if parsed is None:
+            logger.warning(
+                "Annotation validation agent returned non-JSON output for page %s; keeping pre-validation page annotations. Raw preview: %.160r",
+                page_number,
+                validated_text,
             )
-        except Exception:
-            logger.warning("Skipping invalid validated annotation payload: %r", item, exc_info=True)
+            validated_annotations.extend(page_annotations)
+            continue
+
+        page_validated_annotations: list[Annotation] = []
+        for item in parsed:
+            try:
+                page_validated_annotations.append(
+                    Annotation(
+                        type=item["type"],
+                        text_ref=normalize_annotation_text_ref(item["text_ref"]),
+                        note=item["note"],
+                        importance=item["importance"],
+                        bbox=annotations_by_page_number(page_annotations, item["page_number"], item["text_ref"]),
+                        page_number=item["page_number"],
+                    )
+                )
+            except Exception:
+                logger.warning("Skipping invalid validated annotation payload: %r", item, exc_info=True)
+
+        logger.info(
+            "Page %s validation kept %s of %s annotations",
+            page_number,
+            len(page_validated_annotations),
+            len(page_annotations),
+        )
+        validated_annotations.extend(page_validated_annotations or page_annotations)
 
     return validated_annotations or annotations
 
@@ -961,6 +1113,13 @@ def annotations_by_page_number(
     return annotations[0].bbox
 
 
+def annotations_grouped_by_page(annotations: list[Annotation]) -> dict[int, list[Annotation]]:
+    grouped: dict[int, list[Annotation]] = {}
+    for annotation in annotations:
+        grouped.setdefault(annotation.page_number, []).append(annotation)
+    return grouped
+
+
 def truncate_summary_source(full_text: str, limit: int = 12000) -> str:
     normalized = full_text.strip()
     if len(normalized) <= limit:
@@ -990,43 +1149,65 @@ def text_ref_word_count(text_ref: str) -> int:
 def locally_validate_annotations(annotations: list[Annotation], chunks: list[dict]) -> list[Annotation]:
     page_sources = build_page_sources(chunks)
     candidates: list[Annotation] = []
+    drop_reasons: Counter[str] = Counter()
 
     for annotation in annotations:
         page_text = page_sources.get(annotation.page_number, "")
         annotation.text_ref = normalize_annotation_text_ref(annotation.text_ref)
         annotation.note = annotation.note.strip()
         if not annotation.text_ref or not annotation.note:
+            drop_reasons["missing_text_ref_or_note"] += 1
             continue
         if annotation.text_ref not in page_text:
+            drop_reasons["text_ref_not_on_page"] += 1
             continue
 
         shortened_text_ref = shorten_text_ref(annotation, page_text)
         if not shortened_text_ref:
+            drop_reasons["unable_to_shorten_within_limit"] += 1
             continue
 
         annotation.text_ref = shortened_text_ref
         if text_ref_word_count(annotation.text_ref) >= annotation_word_limit(annotation.type):
+            drop_reasons["text_ref_exceeds_word_limit"] += 1
             continue
 
         candidates.append(annotation)
 
     winners: dict[str, tuple[Annotation, int]] = {}
+    duplicate_drops = 0
     for index, annotation in enumerate(candidates):
         key = normalize_annotation_text_ref_key(annotation.text_ref)
         if not key:
+            drop_reasons["empty_normalized_key"] += 1
             continue
 
         current = winners.get(key)
-        if current is None or annotation_rank(annotation, index) > annotation_rank(current[0], current[1]):
+        if current is None:
+            winners[key] = (annotation, index)
+            continue
+
+        duplicate_drops += 1
+        if annotation_rank(annotation, index) > annotation_rank(current[0], current[1]):
             winners[key] = (annotation, index)
 
-    return [
+    if duplicate_drops:
+        drop_reasons["duplicate_text_ref"] += duplicate_drops
+
+    if drop_reasons:
+        logger.info("Local validation drop reasons: %s", format_counter(drop_reasons))
+    else:
+        logger.info("Local validation drop reasons: none")
+
+    validated = [
         annotation
         for annotation, _ in sorted(
             winners.values(),
             key=lambda candidate: (candidate[0].page_number, candidate[1]),
         )
     ]
+    logger.info("Local validation survivors by type/importance: %s", summarize_annotations(validated))
+    return validated
 
 
 def shorten_text_ref(annotation: Annotation, page_text: str) -> str | None:
@@ -1113,6 +1294,43 @@ def annotation_rank(annotation: Annotation, index: int) -> tuple[int, int, int]:
         "highlight": 2,
     }
     return (annotation.importance, type_priority[annotation.type], -index)
+
+
+def summarize_annotations(annotations: list[Annotation]) -> str:
+    if not annotations:
+        return "none"
+
+    by_type = Counter(annotation.type for annotation in annotations)
+    by_importance = Counter(str(annotation.importance) for annotation in annotations)
+    preview = ", ".join(
+        f"p{annotation.page_number}:{annotation.type}:{annotation.importance}:{annotation.text_ref[:48]}"
+        for annotation in annotations[:6]
+    )
+    parts = [
+        f"types={format_counter(by_type)}",
+        f"importance={format_counter(by_importance)}",
+        f"preview=[{preview}]",
+    ]
+    if len(annotations) > 6:
+        parts.append(f"+{len(annotations) - 6} more")
+    return " ".join(parts)
+
+
+def format_annotation_debug_items(items: list[dict]) -> str:
+    if not items:
+        return "none"
+
+    return "; ".join(
+        f"{item.get('type', '?')}:{item.get('importance', '?')}:{normalize_annotation_text_ref(str(item.get('text_ref', '')))[:60]}"
+        for item in items[:6]
+    ) + (f" (+{len(items) - 6} more)" if len(items) > 6 else "")
+
+
+def format_counter(counter: Counter[str]) -> str:
+    if not counter:
+        return "none"
+
+    return ", ".join(f"{key}={value}" for key, value in counter.most_common())
 
 
 def should_skip_block(text: str) -> bool:

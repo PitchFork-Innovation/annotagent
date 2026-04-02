@@ -94,6 +94,32 @@ class AnnotationPromptTests(unittest.TestCase):
         raw = "Alpha\x00Beta\x02Gamma\x12Delta\tLine\nBreak"
         self.assertEqual(sanitize_extracted_text(raw), "AlphaBetaGammaDelta\tLine\nBreak")
 
+    def test_prompt_builders_strip_transport_unsafe_characters(self) -> None:
+        unsafe_passage = "Alpha\x00Beta\u0085Gamma\ud834Delta\ufffeOmega"
+        content = build_annotation_request_content(unsafe_passage)
+        self.assertNotIn("\x00", content)
+        self.assertNotIn("\u0085", content)
+        self.assertNotIn("\ud834", content)
+        self.assertNotIn("\ufffe", content)
+        self.assertIn("AlphaBetaGammaDeltaOmega", content)
+
+        validation_content = build_validation_request_content(
+            {5: unsafe_passage},
+            [
+                {
+                    "type": "note",
+                    "text_ref": "Alpha\x00Beta",
+                    "note": "Alpha\x00Beta matters.",
+                    "importance": 1,
+                    "page_number": 5,
+                }
+            ],
+        )
+        self.assertNotIn("\x00", validation_content)
+        self.assertNotIn("\u0085", validation_content)
+        self.assertNotIn("\ud834", validation_content)
+        self.assertNotIn("\ufffe", validation_content)
+
 
 if __name__ == "__main__":
     unittest.main()
