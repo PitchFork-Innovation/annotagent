@@ -5,12 +5,22 @@ from python_service.main import (
     ANNOTATION_FEWSHOT_EXAMPLES,
     ANNOTATION_REPAIR_FEWSHOT_EXAMPLES,
     ANNOTATION_VALIDATION_FEWSHOT_EXAMPLES,
+    MemoryListItem,
+    MemoryRecentAnnotation,
+    RollingMemoryState,
+    build_deterministic_annotation_brief_lines,
     build_annotation_messages,
+    build_annotation_brief_source,
+    build_chunk_neighbor_context,
     build_annotation_repair_messages,
     build_annotation_request_content,
     build_annotation_validation_messages,
     build_repair_request_content,
     build_validation_request_content,
+    compact_rolling_memory,
+    filter_chunk_annotations_for_memory,
+    infer_section_hint,
+    render_rolling_memory,
     sanitize_extracted_text,
 )
 
@@ -48,6 +58,35 @@ class AnnotationPromptTests(unittest.TestCase):
             build_annotation_request_content(ANNOTATION_FEWSHOT_EXAMPLES[0]["passage"]),
         )
         self.assertEqual(json.loads(first_example_assistant["content"]), ANNOTATION_FEWSHOT_EXAMPLES[0]["output"])
+
+    def test_generation_messages_only_apply_context_to_live_passage(self) -> None:
+        live_passage = "Live passage for annotation."
+        messages = build_annotation_messages(
+            live_passage,
+            paper_brief="- Main thesis.\n- Method.\n- Result.\n- Caveat.",
+            rolling_memory="Paper so far:\n- Prior result.",
+            local_context="Previous chunk tail:\nEarlier sentence.",
+            page_number=12,
+            section_hint="Results",
+        )
+
+        self.assertIn("Paper brief:", messages[-1]["content"])
+        self.assertIn("Rolling memory:", messages[-1]["content"])
+        self.assertIn("Local context:", messages[-1]["content"])
+        self.assertIn("Page: 12", messages[-1]["content"])
+        self.assertIn("Section hint: Results", messages[-1]["content"])
+        self.assertNotIn("Paper brief:", messages[1]["content"])
+        self.assertNotIn("Rolling memory:", messages[1]["content"])
+        self.assertNotIn("Local context:", messages[1]["content"])
+
+    def test_build_annotation_request_content_is_unchanged_without_optional_context(self) -> None:
+        live_passage = "Live passage for annotation."
+        self.assertEqual(
+            build_annotation_request_content(live_passage),
+            "Annotate the following academic passage.\n"
+            "Return only a JSON array matching the required schema.\n\n"
+            "Passage:\nLive passage for annotation.",
+        )
 
     def test_repair_messages_include_correction_examples(self) -> None:
         live_source = "Source passage."
@@ -119,6 +158,166 @@ class AnnotationPromptTests(unittest.TestCase):
         self.assertNotIn("\u0085", validation_content)
         self.assertNotIn("\ud834", validation_content)
         self.assertNotIn("\ufffe", validation_content)
+
+    def test_annotation_brief_source_samples_early_middle_and_late_chunks(self) -> None:
+        chunks = [
+            {"page_number": index + 1, "text": f"chunk-{index}", "section_hint": None}
+            for index in range(12)
+        ]
+        source = build_annotation_brief_source(chunks, sample_count=5)
+
+        self.assertIn("chunk-0", source)
+        self.assertIn("chunk-6", source)
+        self.assertIn("chunk-11", source)
+
+    def test_deterministic_annotation_brief_lines_include_early_middle_and_late_context(self) -> None:
+        chunks = [
+            {"page_number": 1, "text": "intro context " * 10, "section_hint": "Introduction"},
+            {"page_number": 2, "text": "method context " * 10, "section_hint": "Method"},
+            {"page_number": 3, "text": "result context " * 10, "section_hint": "Results"},
+        ]
+
+        lines = build_deterministic_annotation_brief_lines(chunks)
+
+        self.assertEqual(len(lines), 3)
+        self.assertIn("Early context (Introduction)", lines[0])
+        self.assertIn("Middle context (Method)", lines[1])
+        self.assertIn("Late context (Results)", lines[2])
+
+    def test_filter_chunk_annotations_for_memory_keeps_valid_strong_unique_items(self) -> None:
+        chunk_text = "Alpha method improves results while BenchmarkX remains difficult."
+        items = [
+            {
+                "type": "highlight",
+                "text_ref": "Alpha method",
+                "note": "Main method.",
+                "importance": 2,
+            },
+            {
+                "type": "highlight",
+                "text_ref": "Alpha method",
+                "note": "Stronger main method note.",
+                "importance": 3,
+            },
+            {
+                "type": "note",
+                "text_ref": "missing text",
+                "note": "Should be dropped.",
+                "importance": 3,
+            },
+            {
+                "type": "definition",
+                "text_ref": "",
+                "note": "Empty text_ref should be dropped.",
+                "importance": 1,
+            },
+        ]
+
+        filtered = filter_chunk_annotations_for_memory(items, chunk_text, page_number=4)
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].text_ref, "Alpha method")
+        self.assertEqual(filtered[0].importance, 3)
+        self.assertEqual(filtered[0].page_number, 4)
+
+    def test_compact_rolling_memory_respects_caps_and_prioritizes_stronger_items(self) -> None:
+        memory = RollingMemoryState(
+            paper_state=[
+                MemoryListItem(text=f"Paper state {index}", importance=(3 if index == 0 else 1), order=index)
+                for index in range(10)
+            ],
+            defined_terms=[f"Term {index}" for index in range(20)],
+            covered_topics=[
+                MemoryListItem(text=f"Topic {index}", importance=(3 if index < 2 else 1), order=index)
+                for index in range(25)
+            ],
+            recent_annotations=[
+                MemoryRecentAnnotation(
+                    type="highlight",
+                    text_ref=f"Ref {index}",
+                    note=f"Note {index}",
+                    importance=(3 if index < 2 else 1),
+                    page_number=index + 1,
+                    order=index,
+                )
+                for index in range(12)
+            ],
+            blocked_text_refs=[f"Ref {index}" for index in range(12)],
+        )
+
+        compacted = compact_rolling_memory(memory)
+
+        self.assertLessEqual(len(compacted.paper_state), 4)
+        self.assertLessEqual(len(compacted.defined_terms), 12)
+        self.assertLessEqual(len(compacted.covered_topics), 12)
+        self.assertLessEqual(len(compacted.recent_annotations), 5)
+        self.assertIn("Paper state 0", [item.text for item in compacted.paper_state])
+        self.assertIn("Topic 0", [item.text for item in compacted.covered_topics])
+
+    def test_render_rolling_memory_stays_within_budget(self) -> None:
+        memory = RollingMemoryState(
+            paper_state=[
+                MemoryListItem(text="Long paper-state bullet " * 8, importance=3, order=10),
+                MemoryListItem(text="Another long paper-state bullet " * 8, importance=2, order=9),
+            ],
+            defined_terms=[f"TechnicalTerm{index}" for index in range(10)],
+            covered_topics=[
+                MemoryListItem(text="Covered topic " * 8 + str(index), importance=1, order=index)
+                for index in range(10)
+            ],
+            recent_annotations=[
+                MemoryRecentAnnotation(
+                    type="note",
+                    text_ref=f"Text ref {index}",
+                    note="A long explanatory note " * 8,
+                    importance=2,
+                    page_number=index + 1,
+                    order=20 - index,
+                )
+                for index in range(8)
+            ],
+        )
+
+        rendered = render_rolling_memory(memory, char_budget=320)
+        self.assertLessEqual(len(rendered), 320)
+
+    def test_rendered_memory_is_stable_when_memory_does_not_change(self) -> None:
+        memory = RollingMemoryState(
+            recent_annotations=[
+                MemoryRecentAnnotation(
+                    type="highlight",
+                    text_ref="Alpha method",
+                    note="Important method detail for the paper.",
+                    importance=3,
+                    page_number=2,
+                    order=1,
+                )
+            ]
+        )
+
+        first = render_rolling_memory(memory, char_budget=320)
+        second = render_rolling_memory(memory, char_budget=320)
+
+        self.assertEqual(first, second)
+
+    def test_neighbor_context_handles_edges(self) -> None:
+        chunks = [
+            {"text": "first chunk"},
+            {"text": "second chunk"},
+            {"text": "third chunk"},
+        ]
+
+        first = build_chunk_neighbor_context(chunks, 0, window_chars=20)
+        last = build_chunk_neighbor_context(chunks, 2, window_chars=20)
+
+        self.assertIn("Next chunk head:", first)
+        self.assertNotIn("Previous chunk tail:", first)
+        self.assertIn("Previous chunk tail:", last)
+        self.assertNotIn("Next chunk head:", last)
+
+    def test_section_hint_inference_is_optional(self) -> None:
+        self.assertEqual(infer_section_hint("3 Results"), "Results")
+        self.assertIsNone(infer_section_hint("This is a full sentence describing an experiment result in detail."))
 
 
 if __name__ == "__main__":

@@ -49,6 +49,17 @@ ANNOTATION_REQUEST_TIMEOUT = float(os.getenv("OPENAI_ANNOTATION_TIMEOUT_SECONDS"
 ARXIV_METADATA_DELAY_SECONDS = float(os.getenv("ARXIV_METADATA_DELAY_SECONDS", "3.0"))
 ARXIV_METADATA_RETRIES = int(os.getenv("ARXIV_METADATA_RETRIES", "6"))
 ARXIV_METADATA_BACKOFF_SECONDS = float(os.getenv("ARXIV_METADATA_BACKOFF_SECONDS", "5.0"))
+ANNOTATION_BRIEF_SAMPLE_COUNT = int(os.getenv("ANNOTATION_BRIEF_SAMPLE_COUNT", "7"))
+ANNOTATION_BRIEF_SAMPLE_CHAR_LIMIT = int(os.getenv("ANNOTATION_BRIEF_SAMPLE_CHAR_LIMIT", "360"))
+ANNOTATION_BRIEF_MAX_BULLETS = int(os.getenv("ANNOTATION_BRIEF_MAX_BULLETS", "4"))
+ANNOTATION_DETERMINISTIC_BRIEF = os.getenv("ANNOTATION_DETERMINISTIC_BRIEF", "1") != "0"
+ROLLING_MEMORY_CHAR_BUDGET = int(os.getenv("ROLLING_MEMORY_CHAR_BUDGET", "1400"))
+LOCAL_CONTEXT_CHAR_WINDOW = int(os.getenv("LOCAL_CONTEXT_CHAR_WINDOW", "180"))
+PAPER_STATE_LIMIT = int(os.getenv("ROLLING_MEMORY_PAPER_STATE_LIMIT", "4"))
+DEFINED_TERMS_LIMIT = int(os.getenv("ROLLING_MEMORY_DEFINED_TERMS_LIMIT", "12"))
+COVERED_TOPICS_LIMIT = int(os.getenv("ROLLING_MEMORY_COVERED_TOPICS_LIMIT", "12"))
+RECENT_ANNOTATIONS_LIMIT = int(os.getenv("ROLLING_MEMORY_RECENT_ANNOTATIONS_LIMIT", "5"))
+BLOCKED_TEXT_REFS_LIMIT = 24
 
 ANNOTATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
@@ -58,7 +69,6 @@ ANNOTATION_VALIDATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
     '"note": string, "importance": 1 | 2 | 3, "page_number": int }'
 )
-
 ANNOTATION_SHARED_RULES = """
 Target reader:
 - technically literate and comfortable with scientific writing
@@ -326,26 +336,76 @@ Validation requirements:
 - if an annotation cannot be made valid while staying useful, delete it
 """.strip()
 
-
 def dump_prompt_json(value: object) -> str:
     return json.dumps(sanitize_prompt_value(value), ensure_ascii=True, indent=2)
 
 
-def build_annotation_request_content(passage: str) -> str:
-    return (
-        "Annotate the following academic passage.\n"
-        "Return only a JSON array matching the required schema.\n\n"
-        f"Passage:\n{sanitize_prompt_text(passage)}"
-    )
+def build_annotation_request_content(
+    passage: str,
+    *,
+    paper_brief: str | None = None,
+    rolling_memory: str | None = None,
+    local_context: str | None = None,
+    page_number: int | None = None,
+    section_hint: str | None = None,
+) -> str:
+    sanitized_passage = sanitize_prompt_text(passage)
+    if not any([paper_brief, rolling_memory, local_context, page_number is not None, section_hint]):
+        return (
+            "Annotate the following academic passage.\n"
+            "Return only a JSON array matching the required schema.\n\n"
+            f"Passage:\n{sanitized_passage}"
+        )
+
+    sections = [
+        "Annotate the following academic passage.\nReturn only a JSON array matching the required schema."
+    ]
+    if paper_brief:
+        sections.append(f"Paper brief:\n{sanitize_prompt_text(paper_brief)}")
+    if rolling_memory:
+        sections.append(f"Rolling memory:\n{sanitize_prompt_text(rolling_memory)}")
+
+    context_parts: list[str] = []
+    if page_number is not None:
+        context_parts.append(f"Page: {page_number}")
+    if section_hint:
+        context_parts.append(f"Section hint: {sanitize_prompt_text(section_hint)}")
+    if local_context:
+        context_parts.append(sanitize_prompt_text(local_context))
+    if context_parts:
+        sections.append(f"Local context:\n" + "\n\n".join(context_parts))
+
+    sections.append(f"Passage:\n{sanitized_passage}")
+    return "\n\n".join(sections)
 
 
-def build_annotation_messages(passage: str) -> list[dict[str, str]]:
+def build_annotation_messages(
+    passage: str,
+    *,
+    paper_brief: str | None = None,
+    rolling_memory: str | None = None,
+    local_context: str | None = None,
+    page_number: int | None = None,
+    section_hint: str | None = None,
+) -> list[dict[str, str]]:
     messages = [{"role": "system", "content": ANNOTATION_PROMPT}]
     for example in ANNOTATION_FEWSHOT_EXAMPLES:
         messages.append({"role": "user", "content": build_annotation_request_content(example["passage"])})
         messages.append({"role": "assistant", "content": dump_prompt_json(example["output"])})
 
-    messages.append({"role": "user", "content": build_annotation_request_content(passage)})
+    messages.append(
+        {
+            "role": "user",
+            "content": build_annotation_request_content(
+                passage,
+                paper_brief=paper_brief,
+                rolling_memory=rolling_memory,
+                local_context=local_context,
+                page_number=page_number,
+                section_hint=section_hint,
+            ),
+        }
+    )
     return messages
 
 
@@ -399,6 +459,7 @@ def build_annotation_validation_messages(
     messages.append({"role": "user", "content": build_validation_request_content(page_sources, annotations)})
     return messages
 
+
 SUMMARY_PROMPT = """
 You are an expert research assistant summarizing an academic paper for a technically literate reader.
 
@@ -449,6 +510,29 @@ class Annotation(BaseModel):
     importance: Literal[1, 2, 3]
     bbox: BoundingBox
     page_number: int
+
+
+class MemoryListItem(BaseModel):
+    text: str
+    importance: Literal[1, 2, 3]
+    order: int = 0
+
+
+class MemoryRecentAnnotation(BaseModel):
+    type: Literal["highlight", "note", "definition"]
+    text_ref: str
+    note: str
+    importance: Literal[1, 2, 3]
+    page_number: int
+    order: int = 0
+
+
+class RollingMemoryState(BaseModel):
+    paper_state: list[MemoryListItem] = Field(default_factory=list)
+    defined_terms: list[str] = Field(default_factory=list)
+    covered_topics: list[MemoryListItem] = Field(default_factory=list)
+    recent_annotations: list[MemoryRecentAnnotation] = Field(default_factory=list)
+    blocked_text_refs: list[str] = Field(default_factory=list)
 
 
 class IngestResponse(BaseModel):
@@ -637,7 +721,7 @@ async def run_annotation_pipeline(
             "totalChunks": len(chunks),
         },
     )
-    annotations = annotate_chunks(chunks, job_id)
+    annotations = annotate_chunks(chunks, title=title, abstract=abstract, job_id=job_id)
     logger.info("Produced %s annotations for %s", len(annotations), arxiv_id)
     write_progress(
         job_id,
@@ -665,6 +749,7 @@ async def run_annotation_pipeline(
 
 def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
     blocks: list[dict] = []
+    current_section_hint: str | None = None
     for page_index in range(pdf_doc.page_count):
         page = pdf_doc.load_page(page_index)
         page_rect = page.rect
@@ -675,10 +760,14 @@ def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
                 continue
             if should_skip_block(cleaned):
                 continue
+            inferred_section_hint = infer_section_hint(cleaned)
+            if inferred_section_hint:
+                current_section_hint = inferred_section_hint
             blocks.append(
                 {
                     "page_number": page_index + 1,
                     "text": cleaned,
+                    "section_hint": current_section_hint,
                     "bbox": {
                         "x": x0 / page_rect.width,
                         "y": y0 / page_rect.height,
@@ -731,20 +820,30 @@ def chunk_blocks(blocks: list[dict]) -> list[dict]:
                 {
                     "page_number": block["page_number"],
                     "text": split_text,
+                    "section_hint": block.get("section_hint"),
                     "bbox": block["bbox"],
                 }
             )
     return chunks
 
 
-def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annotation]:
+def annotate_chunks(
+    chunks: list[dict],
+    *,
+    title: str,
+    abstract: str,
+    job_id: str | None = None,
+) -> list[Annotation]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is missing for the Python annotation service.")
 
     client = OpenAI(api_key=api_key, timeout=ANNOTATION_REQUEST_TIMEOUT)
     annotations: list[Annotation] = []
+    rolling_memory = RollingMemoryState()
     model_name = resolve_annotation_model(client, chunks[0]["text"] if chunks else "Test chunk")
+    annotation_brief = generate_annotation_brief(title, abstract, chunks)
+    rolling_memory_text = ""
 
     for index, chunk in enumerate(chunks, start=1):
         try:
@@ -770,7 +869,14 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 model=model_name,
                 max_completion_tokens=700,
                 temperature=0,
-                messages=build_annotation_messages(chunk["text"]),
+                messages=build_annotation_messages(
+                    chunk["text"],
+                    paper_brief=annotation_brief,
+                    rolling_memory=rolling_memory_text or None,
+                    local_context=build_chunk_neighbor_context(chunks, index - 1),
+                    page_number=chunk["page_number"],
+                    section_hint=chunk.get("section_hint"),
+                ),
             )
 
             text = extract_text_content(response)
@@ -801,6 +907,10 @@ def annotate_chunks(chunks: list[dict], job_id: str | None = None) -> list[Annot
                 len(parsed),
                 format_annotation_debug_items(parsed),
             )
+            memory_candidates = filter_chunk_annotations_for_memory(parsed, chunk["text"], chunk["page_number"])
+            if memory_candidates:
+                rolling_memory = update_rolling_memory(rolling_memory, memory_candidates)
+                rolling_memory_text = render_rolling_memory(rolling_memory)
             for item in parsed:
                 normalized_text_ref = normalize_annotation_text_ref(item["text_ref"])
                 if not normalized_text_ref:
@@ -952,6 +1062,10 @@ def extract_text_content(response) -> str:
 
 
 def normalize_summary_markdown(text: str) -> str:
+    return normalize_markdown_bullets(text, max_bullets=3)
+
+
+def normalize_markdown_bullets(text: str, *, max_bullets: int) -> str:
     normalized = text.strip()
     fenced_match = re.search(r"```(?:markdown)?\s*([\s\S]*?)```", normalized)
     if fenced_match:
@@ -962,9 +1076,373 @@ def normalize_summary_markdown(text: str) -> str:
         return ""
 
     if not all(line.lstrip().startswith(("-", "*")) for line in bullet_lines):
-        bullet_lines = [f"- {line.lstrip('-* ').strip()}" for line in bullet_lines[:3] if line.strip()]
+        bullet_lines = [f"- {line.lstrip('-* ').strip()}" for line in bullet_lines[:max_bullets] if line.strip()]
 
-    return "\n".join(bullet_lines[:3]).strip()
+    return "\n".join(bullet_lines[:max_bullets]).strip()
+
+
+def generate_annotation_brief(title: str, abstract: str, chunks: list[dict]) -> str:
+    abstract_bullets = normalize_markdown_bullets(abstract, max_bullets=2)
+    sampled_bullets = build_deterministic_annotation_brief_lines(chunks) if ANNOTATION_DETERMINISTIC_BRIEF else []
+    title_line = shorten_memory_text(title, 140)
+
+    lines: list[str] = []
+    if title_line:
+        lines.append(f"- Paper: {title_line}")
+    if abstract_bullets:
+        lines.extend(abstract_bullets.splitlines()[:2])
+    lines.extend(sampled_bullets)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        normalized = normalize_annotation_text_ref(line)
+        key = normalize_annotation_text_ref_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+        if len(deduped) >= ANNOTATION_BRIEF_MAX_BULLETS:
+            break
+
+    return "\n".join(deduped)
+
+
+def build_annotation_brief_source(chunks: list[dict], sample_count: int = ANNOTATION_BRIEF_SAMPLE_COUNT) -> str:
+    indices = select_representative_indices(len(chunks), sample_count)
+    excerpts: list[str] = []
+    for index in indices:
+        chunk = chunks[index]
+        excerpt = shorten_memory_text(chunk["text"], ANNOTATION_BRIEF_SAMPLE_CHAR_LIMIT)
+        section_hint = chunk.get("section_hint")
+        label = f"[sample {index + 1} | page {chunk['page_number']}"
+        if section_hint:
+            label += f" | section {section_hint}"
+        label += "]"
+        excerpts.append(f"{label}\n{excerpt}")
+    return "\n\n".join(excerpts)
+
+
+def build_deterministic_annotation_brief_lines(chunks: list[dict]) -> list[str]:
+    if not chunks:
+        return []
+
+    indices = select_representative_indices(len(chunks), min(3, ANNOTATION_BRIEF_MAX_BULLETS))
+    lines: list[str] = []
+    labels = ("Early context", "Middle context", "Late context")
+    for position, index in enumerate(indices):
+        chunk = chunks[index]
+        section_hint = chunk.get("section_hint")
+        label = labels[min(position, len(labels) - 1)]
+        prefix = f"{label} ({section_hint})" if section_hint else label
+        lines.append(f"- {prefix}: {shorten_words(chunk['text'], 22)}")
+    return lines
+
+
+def select_representative_indices(total: int, sample_count: int) -> list[int]:
+    if total <= 0 or sample_count <= 0:
+        return []
+    if total <= sample_count:
+        return list(range(total))
+
+    target = min(total, sample_count)
+    positions = {round(step * (total - 1) / (target - 1)) for step in range(target)}
+    indices = sorted(positions)
+    candidate = 0
+    while len(indices) < target and candidate < total:
+        if candidate not in positions:
+            indices.append(candidate)
+        candidate += 1
+    return sorted(indices[:target])
+
+
+def build_chunk_neighbor_context(chunks: list[dict], index: int, window_chars: int = LOCAL_CONTEXT_CHAR_WINDOW) -> str:
+    parts: list[str] = []
+    if index > 0:
+        parts.append(f"Previous chunk tail:\n{tail_text(chunks[index - 1]['text'], window_chars)}")
+    if index + 1 < len(chunks):
+        parts.append(f"Next chunk head:\n{head_text(chunks[index + 1]['text'], window_chars)}")
+    return "\n\n".join(parts)
+
+
+def head_text(text: str, limit: int) -> str:
+    normalized = normalize_annotation_text_ref(text)
+    return shorten_memory_text(normalized, limit)
+
+
+def tail_text(text: str, limit: int) -> str:
+    normalized = normalize_annotation_text_ref(text)
+    if len(normalized) <= limit:
+        return normalized
+    return f"...{normalized[-limit:].lstrip()}"
+
+
+def filter_chunk_annotations_for_memory(
+    items: list[dict],
+    chunk_text: str,
+    page_number: int,
+) -> list["MemoryRecentAnnotation"]:
+    winners: dict[str, MemoryRecentAnnotation] = {}
+
+    for index, item in enumerate(items):
+        try:
+            annotation_type = item["type"]
+            text_ref = normalize_annotation_text_ref(str(item["text_ref"]))
+            note = normalize_annotation_text_ref(str(item["note"]))
+            importance = int(item["importance"])
+            if annotation_type not in {"highlight", "note", "definition"}:
+                continue
+            if importance not in {1, 2, 3}:
+                continue
+            if not text_ref or not note or text_ref not in chunk_text:
+                continue
+
+            candidate = MemoryRecentAnnotation(
+                type=annotation_type,
+                text_ref=text_ref,
+                note=note,
+                importance=importance,
+                page_number=page_number,
+                order=index,
+            )
+            key = normalize_annotation_text_ref_key(text_ref)
+            current = winners.get(key)
+            if current is None or memory_recent_annotation_rank(candidate) > memory_recent_annotation_rank(current):
+                winners[key] = candidate
+        except Exception:
+            continue
+
+    return sorted(winners.values(), key=lambda item: (item.page_number, item.order))
+
+
+def update_rolling_memory(
+    memory: "RollingMemoryState",
+    new_annotations: list["MemoryRecentAnnotation"],
+) -> "RollingMemoryState":
+    next_order = memory_max_order(memory)
+    for item in new_annotations:
+        next_order += 1
+        item.order = next_order
+        memory.recent_annotations.append(item)
+        memory.blocked_text_refs.append(normalize_annotation_text_ref(item.text_ref))
+        if item.type == "definition":
+            memory.defined_terms.append(item.text_ref)
+
+        topic_text = build_memory_topic(item)
+        if topic_text:
+            upsert_memory_list_item(memory.covered_topics, topic_text, item.importance, item.order)
+
+        paper_state_text = build_paper_state_bullet(item)
+        if paper_state_text:
+            upsert_memory_list_item(memory.paper_state, paper_state_text, item.importance, item.order)
+
+    return compact_rolling_memory(memory)
+
+
+def compact_rolling_memory(memory: "RollingMemoryState") -> "RollingMemoryState":
+    memory.paper_state = compact_memory_list_items(memory.paper_state, PAPER_STATE_LIMIT)
+    memory.covered_topics = compact_memory_list_items(memory.covered_topics, COVERED_TOPICS_LIMIT)
+    memory.defined_terms = compact_unique_strings(memory.defined_terms, DEFINED_TERMS_LIMIT)
+    memory.recent_annotations = compact_recent_annotations(memory.recent_annotations, RECENT_ANNOTATIONS_LIMIT)
+
+    allowed_blocked_keys = {normalize_annotation_text_ref_key(item.text_ref) for item in memory.recent_annotations}
+    allowed_blocked_keys.update(normalize_annotation_text_ref_key(term) for term in memory.defined_terms)
+    deduped_blocked: list[str] = []
+    seen_blocked: set[str] = set()
+    for value in reversed(memory.blocked_text_refs):
+        normalized = normalize_annotation_text_ref(value)
+        key = normalize_annotation_text_ref_key(normalized)
+        if not key or key in seen_blocked or key not in allowed_blocked_keys:
+            continue
+        seen_blocked.add(key)
+        deduped_blocked.append(normalized)
+        if len(deduped_blocked) >= BLOCKED_TEXT_REFS_LIMIT:
+            break
+    memory.blocked_text_refs = list(reversed(deduped_blocked))
+    return memory
+
+
+def compact_memory_list_items(items: list["MemoryListItem"], limit: int) -> list["MemoryListItem"]:
+    winners: dict[str, MemoryListItem] = {}
+    for item in items:
+        normalized_text = shorten_memory_text(item.text, 160)
+        key = normalize_annotation_text_ref_key(normalized_text)
+        if not key:
+            continue
+        candidate = MemoryListItem(text=normalized_text, importance=item.importance, order=item.order)
+        current = winners.get(key)
+        if current is None or memory_list_item_rank(candidate) > memory_list_item_rank(current):
+            winners[key] = candidate
+
+    selected = sorted(winners.values(), key=memory_list_item_rank, reverse=True)[:limit]
+    return sorted(selected, key=memory_list_item_rank, reverse=True)
+
+
+def compact_unique_strings(values: list[str], limit: int) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for value in reversed(values):
+        normalized = normalize_annotation_text_ref(value)
+        key = normalize_annotation_text_ref_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        selected.append(normalized)
+        if len(selected) >= limit:
+            break
+    return list(reversed(selected))
+
+
+def compact_recent_annotations(
+    items: list["MemoryRecentAnnotation"],
+    limit: int,
+) -> list["MemoryRecentAnnotation"]:
+    winners: dict[str, MemoryRecentAnnotation] = {}
+    for item in items:
+        key = normalize_annotation_text_ref_key(item.text_ref)
+        if not key:
+            continue
+        current = winners.get(key)
+        if current is None or memory_recent_annotation_rank(item) > memory_recent_annotation_rank(current):
+            winners[key] = item
+
+    selected = sorted(winners.values(), key=memory_recent_annotation_rank, reverse=True)[:limit]
+    return sorted(selected, key=lambda item: item.order, reverse=True)
+
+
+def upsert_memory_list_item(
+    items: list["MemoryListItem"],
+    text: str,
+    importance: int,
+    order: int,
+) -> None:
+    normalized_text = shorten_memory_text(text, 160)
+    key = normalize_annotation_text_ref_key(normalized_text)
+    if not key:
+        return
+
+    candidate = MemoryListItem(text=normalized_text, importance=importance, order=order)
+    for index, current in enumerate(items):
+        if normalize_annotation_text_ref_key(current.text) != key:
+            continue
+        if memory_list_item_rank(candidate) > memory_list_item_rank(current):
+            items[index] = candidate
+        return
+
+    items.append(candidate)
+
+
+def build_memory_topic(item: "MemoryRecentAnnotation") -> str:
+    return shorten_words(item.text_ref, 6)
+
+
+def build_paper_state_bullet(item: "MemoryRecentAnnotation") -> str | None:
+    if item.type == "definition":
+        return None
+    if item.type == "highlight":
+        return f"{item.text_ref}: {shorten_words(item.note, 14)}"
+    if item.importance >= 2:
+        return shorten_words(item.note, 12)
+    return None
+
+
+def render_rolling_memory(memory: "RollingMemoryState", char_budget: int = ROLLING_MEMORY_CHAR_BUDGET) -> str:
+    working = compact_rolling_memory(memory.model_copy(deep=True))
+    while True:
+        rendered = render_rolling_memory_sections(working)
+        if len(rendered) <= char_budget or not has_trim_candidates(working):
+            return rendered
+        trim_rolling_memory(working)
+
+
+def render_rolling_memory_sections(memory: "RollingMemoryState") -> str:
+    sections: list[str] = []
+    if memory.paper_state:
+        sections.append(
+            "Paper so far:\n" + "\n".join(f"- {item.text}" for item in memory.paper_state)
+        )
+    if memory.defined_terms:
+        sections.append(
+            "Already defined:\n" + "\n".join(f"- {term}" for term in memory.defined_terms)
+        )
+    if memory.covered_topics:
+        sections.append(
+            "Already covered:\n" + "\n".join(f"- {item.text}" for item in memory.covered_topics)
+        )
+    if memory.recent_annotations:
+        sections.append(
+            "Recent strong annotations:\n"
+            + "\n".join(f"- {render_recent_annotation(item)}" for item in memory.recent_annotations)
+        )
+    return "\n\n".join(sections)
+
+
+def render_recent_annotation(item: "MemoryRecentAnnotation") -> str:
+    return (
+        f"p{item.page_number} {item.type} ({item.importance}) "
+        f"\"{item.text_ref}\": {shorten_words(item.note, 10)}"
+    )
+
+
+def has_trim_candidates(memory: "RollingMemoryState") -> bool:
+    return bool(memory.recent_annotations or memory.covered_topics or memory.paper_state or memory.defined_terms)
+
+
+def trim_rolling_memory(memory: "RollingMemoryState") -> None:
+    if memory.recent_annotations:
+        memory.recent_annotations.pop()
+        return
+
+    covered_index = lowest_priority_index(memory.covered_topics)
+    if covered_index is not None:
+        memory.covered_topics.pop(covered_index)
+        return
+
+    paper_state_index = lowest_priority_index(memory.paper_state)
+    if paper_state_index is not None:
+        memory.paper_state.pop(paper_state_index)
+        return
+
+    if memory.defined_terms:
+        memory.defined_terms.pop(0)
+
+
+def lowest_priority_index(items: list["MemoryListItem"]) -> int | None:
+    if not items:
+        return None
+    return min(range(len(items)), key=lambda index: memory_list_item_rank(items[index]))
+
+
+def shorten_words(text: str, max_words: int) -> str:
+    normalized = normalize_annotation_text_ref(text)
+    words = normalized.split()
+    if len(words) <= max_words:
+        return normalized
+    return " ".join(words[:max_words]).rstrip(".,;:") + "..."
+
+
+def shorten_memory_text(text: str, limit: int) -> str:
+    normalized = normalize_annotation_text_ref(text)
+    if len(normalized) <= limit:
+        return normalized
+    truncated = normalized[:limit].rsplit(" ", 1)[0].strip()
+    return f"{truncated}..."
+
+
+def memory_max_order(memory: "RollingMemoryState") -> int:
+    values = [0]
+    values.extend(item.order for item in memory.paper_state)
+    values.extend(item.order for item in memory.covered_topics)
+    values.extend(item.order for item in memory.recent_annotations)
+    return max(values)
+
+
+def memory_list_item_rank(item: "MemoryListItem") -> tuple[int, int]:
+    return (item.importance, item.order)
+
+
+def memory_recent_annotation_rank(item: "MemoryRecentAnnotation") -> tuple[int, int, int]:
+    return (item.importance, annotation_type_priority(item.type), item.order)
 
 
 def parse_annotation_json(text: str):
@@ -1288,12 +1766,16 @@ def dedupe_annotations(annotations: list[Annotation]) -> list[Annotation]:
 
 
 def annotation_rank(annotation: Annotation, index: int) -> tuple[int, int, int]:
+    return (annotation.importance, annotation_type_priority(annotation.type), -index)
+
+
+def annotation_type_priority(annotation_type: str) -> int:
     type_priority = {
         "definition": 0,
         "note": 1,
         "highlight": 2,
     }
-    return (annotation.importance, type_priority[annotation.type], -index)
+    return type_priority[annotation_type]
 
 
 def summarize_annotations(annotations: list[Annotation]) -> str:
@@ -1331,6 +1813,51 @@ def format_counter(counter: Counter[str]) -> str:
         return "none"
 
     return ", ".join(f"{key}={value}" for key, value in counter.most_common())
+
+
+def infer_section_hint(text: str) -> str | None:
+    normalized = normalize_annotation_text_ref(text)
+    lowered = normalized.lower()
+    common_headings = {
+        "abstract",
+        "introduction",
+        "background",
+        "related work",
+        "method",
+        "methods",
+        "approach",
+        "model",
+        "experiments",
+        "results",
+        "discussion",
+        "limitations",
+        "conclusion",
+        "conclusions",
+        "appendix",
+    }
+    if lowered in common_headings:
+        return normalized.title()
+
+    numbered_match = re.match(r"^(?:\d+(?:\.\d+)*)\s+([A-Za-z][A-Za-z0-9 ,:/-]{1,60})$", normalized)
+    if numbered_match:
+        return normalize_annotation_text_ref(numbered_match.group(1)).title()
+
+    if len(normalized) > 60:
+        return None
+
+    words = normalized.split()
+    if not 1 <= len(words) <= 8:
+        return None
+
+    alpha_words = [word for word in words if any(char.isalpha() for char in word)]
+    if not alpha_words:
+        return None
+
+    title_like_ratio = sum(word[:1].isupper() for word in alpha_words) / len(alpha_words)
+    if title_like_ratio >= 0.8 and normalized[-1:] not in {".", "?", "!"}:
+        return normalized
+
+    return None
 
 
 def should_skip_block(text: str) -> bool:

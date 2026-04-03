@@ -41,6 +41,11 @@
   - shortest exact quotes
   - concise notes that add interpretation rather than paraphrase
   - definition notes beginning with `<TERM>:`
+- Chunk annotation prompts now keep the same few-shot and system structure while adding bounded live context:
+  - one representative whole-paper brief built locally from the abstract and sampled chunks
+  - a rolling in-memory memory block built from earlier chunk outputs
+  - small neighboring chunk snippets plus page and optional section hints
+- The rolling memory is Python-process-local only, deterministically compressed, and is not persisted or exposed in the public payload contract.
 - Repair and validation stages exist to recover malformed output and remove weak or duplicate annotations.
 
 ## Summary Contract

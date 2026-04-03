@@ -18,7 +18,14 @@
 - Fetch the paper PDF.
 - Extract text blocks and bounding boxes with PyMuPDF.
 - Clean extracted text and split it into paragraph-scale chunks.
+- Infer lightweight section hints from heading-like blocks when possible.
+- Build a representative whole-paper brief from sampled chunks across the paper.
 - Send chunks through OpenAI annotation generation prompts.
+- Inject bounded live context into each chunk request:
+  - representative paper brief
+  - rolling in-memory annotation memory from earlier chunks
+  - adjacent chunk snippets plus page and optional section metadata
+- Maintain and compress the rolling memory deterministically in Python so prompt context stays concise without extra OpenAI calls.
 - Repair malformed annotation output when needed.
 - Validate and deduplicate annotations across the full paper.
 - Generate a paper summary for the frontend summary card and stored `ai_summary`.
@@ -51,6 +58,8 @@
 
 ## Common Change Patterns
 - Annotation quality issue: inspect shared prompt rules, few-shot examples, repair flow, and validation flow before changing extraction.
+- Late-paper context issue: inspect the annotation brief sampling, rolling-memory helpers, local context windowing, and memory compression path before increasing annotation count or model size.
+- Annotation throughput issue: prefer tightening deterministic brief generation, rolling-memory caps, and local-context window sizes before adding new model-side context logic.
 - Missing or bad highlights: prefer prompt/validation fixes before broadening annotation count.
 - Reprocess behavior bug: inspect progress writing, `/api/ingest/progress`, and replacement semantics in `reprocessPaperAnnotations`.
 - Summary changes: inspect both Python `/summarize` behavior and the `ensurePaperSummary` fallback path in TypeScript.

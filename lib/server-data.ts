@@ -303,9 +303,11 @@ function postJson(url: URL, body: string, timeoutMs: number): Promise<{ status: 
       }
     );
 
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`Python annotation service timed out after ${timeoutMs / 1000} seconds.`));
-    });
+    // Temporarily disable the end-to-end ingest request timeout so we can
+    // validate correctness on long-running papers before optimizing speed.
+    // request.setTimeout(timeoutMs, () => {
+    //   request.destroy(new Error(`Python annotation service timed out after ${timeoutMs / 1000} seconds.`));
+    // });
 
     request.on("error", (error) => {
       reject(error);
