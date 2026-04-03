@@ -27,6 +27,9 @@ type LinkedPaperRow = {
   paper: {
     id: string;
     arxiv_id: string;
+    title: string;
+    abstract: string;
+    pdf_url: string;
   } | null;
 };
 
@@ -202,18 +205,30 @@ export async function reprocessPaperAnnotations(paperId: string, userId: string,
 
   const { data: linkedPaper } = await supabase
     .from("user_papers")
-    .select("paper:papers(id, arxiv_id)")
+    .select("paper:papers(id, arxiv_id, title, abstract, pdf_url)")
     .eq("user_id", userId)
     .eq("paper_id", paperId)
     .maybeSingle();
 
   const paper = (linkedPaper as LinkedPaperRow | null)?.paper;
 
-  if (!paper?.id || !paper?.arxiv_id) {
+  if (!paper?.id || !paper?.arxiv_id || !paper.title || !paper.pdf_url) {
     throw new Error("Paper not found in your library.");
   }
 
-  await upgradePaperFromPipeline(admin, paper.id, paper.arxiv_id, jobId);
+  const resolvedPdfUrl = await resolvePreferredPaperPdfUrl(admin, paper.arxiv_id, paper.pdf_url);
+
+  await upgradePaperFromPipeline(
+    admin,
+    {
+      id: paper.id,
+      arxivId: paper.arxiv_id,
+      title: paper.title,
+      abstract: paper.abstract,
+      pdfUrl: resolvedPdfUrl
+    },
+    jobId
+  );
 
   const { count } = await admin
     .from("annotations")
@@ -250,6 +265,30 @@ function normalizeRecentPaper(paper: RecentUserPaperRow["paper"]): RecentPaperRo
 async function fetchIngestionPayload(arxivId: string, jobId?: string): Promise<IngestionPayload> {
   const url = new URL("/ingest", env.PYTHON_SERVICE_URL);
   const payload = JSON.stringify({ arxiv_id: arxivId, job_id: jobId });
+  return fetchPythonPayload(url, payload);
+}
+
+async function fetchReprocessPayload(
+  paper: {
+    arxivId: string;
+    title: string;
+    abstract: string;
+    pdfUrl: string;
+  },
+  jobId?: string
+): Promise<IngestionPayload> {
+  const url = new URL("/reprocess", env.PYTHON_SERVICE_URL);
+  const payload = JSON.stringify({
+    arxiv_id: paper.arxivId,
+    title: paper.title,
+    abstract: paper.abstract,
+    pdf_url: paper.pdfUrl,
+    job_id: jobId
+  });
+  return fetchPythonPayload(url, payload);
+}
+
+async function fetchPythonPayload(url: URL, payload: string): Promise<IngestionPayload> {
   let response: { status: number; body: string };
 
   try {
@@ -353,20 +392,25 @@ async function cachePaperPdf(admin: ReturnType<typeof createSupabaseAdminClient>
 
 async function upgradePaperFromPipeline(
   admin: ReturnType<typeof createSupabaseAdminClient>,
-  paperId: string,
-  arxivId: string,
+  paper: {
+    id: string;
+    arxivId: string;
+    title: string;
+    abstract: string;
+    pdfUrl: string;
+  },
   jobId?: string
 ) {
-  const payload = await fetchIngestionPayload(arxivId, jobId);
+  const payload = await fetchReprocessPayload(paper, jobId);
   const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
 
-  const { error: paperError } = await updatePaperRow(admin, paperId, payload, cachedPdfUrl);
+  const { error: paperError } = await updatePaperRow(admin, paper.id, payload, cachedPdfUrl);
 
   if (paperError) {
     throw new Error(paperError.message);
   }
 
-  const { error: deleteError } = await admin.from("annotations").delete().eq("paper_id", paperId);
+  const { error: deleteError } = await admin.from("annotations").delete().eq("paper_id", paper.id);
 
   if (deleteError) {
     throw new Error(deleteError.message);
@@ -378,7 +422,7 @@ async function upgradePaperFromPipeline(
 
   const { error: insertError } = await admin.from("annotations").insert(
     payload.annotations.map((annotation) => ({
-      paper_id: paperId,
+      paper_id: paper.id,
       page_number: annotation.page_number,
       type: annotation.type,
       text_ref: annotation.text_ref,
@@ -391,6 +435,38 @@ async function upgradePaperFromPipeline(
   if (insertError) {
     throw new Error(insertError.message);
   }
+}
+
+async function resolvePreferredPaperPdfUrl(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  arxivId: string,
+  fallbackUrl: string
+) {
+  const bucket = env.SUPABASE_STORAGE_BUCKET;
+  const objectPath = `arxiv/${arxivId}.pdf`;
+  const { data: existing } = await admin.storage.from(bucket).list("arxiv", {
+    search: `${arxivId}.pdf`
+  });
+
+  if (existing?.some((file) => file.name === `${arxivId}.pdf`)) {
+    const { data, error } = await admin.storage.from(bucket).createSignedUrl(objectPath, 60 * 15);
+
+    if (error || !data?.signedUrl) {
+      throw new Error(error?.message ?? "Unable to create a signed URL for the cached PDF.");
+    }
+
+    return data.signedUrl;
+  }
+
+  if (isArxivUrl(fallbackUrl)) {
+    throw new Error("Cached PDF unavailable for this paper. Reprocess avoids arXiv and needs a stored PDF.");
+  }
+
+  return fallbackUrl;
+}
+
+function isArxivUrl(url: string) {
+  return /https?:\/\/(?:www\.|export\.)?arxiv\.org\//i.test(url);
 }
 
 async function ensurePaperSummary(paper: WorkspacePaperRow): Promise<string | null> {
