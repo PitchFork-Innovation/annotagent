@@ -57,10 +57,12 @@
   - server client for user-scoped reads/writes like `user_papers`
   - admin client for cross-user paper and annotation persistence plus storage access
 - `reprocessPaperAnnotations` first proves the current user owns the paper through `user_papers`.
+- Reprocess prefers the cached storage PDF when present, but should fall back to the paper's saved `pdf_url` if the cache object is missing so older papers can still be regenerated.
 - Chat history is optional. Missing KV env vars should not break chat responses.
 
 ## Coupled Contracts
 - `PaperWorkspace`, `PaperRecord`, `AnnotationRecord`, and `IngestionPayload` in `lib/types.ts` are the main TypeScript contracts.
+- Annotation records may now include a deterministic text `anchor` in addition to `bbox`; keep Python JSON, database rows, server mapping, and workspace consumers in sync.
 - If you change fields in the Python ingest response, update:
   - `lib/types.ts`
   - `lib/server-data.ts`

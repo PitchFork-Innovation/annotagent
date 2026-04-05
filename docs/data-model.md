@@ -20,6 +20,8 @@
 - `annotations`
   - child rows keyed by `paper_id`
   - stores `page_number`, `type`, `text_ref`, `note`, `importance`, and JSON `bbox`
+  - `bbox` is a normalized page-space rectangle and may also carry finer-grained fragment rectangles for multi-fragment highlights
+  - optional JSON `anchor` stores deterministic page-text offsets plus occurrence index for repeated-term disambiguation
 - `user_papers`
   - join table linking authenticated users to papers in their private library
   - primary key is `(user_id, paper_id)`
@@ -38,7 +40,7 @@
 ## Application Invariants
 - A paper is globally deduplicated by `arxiv_id`.
 - A user can link an existing paper into their library without duplicating the paper row.
-- Annotations are page-scoped and rely on valid bounding boxes for overlay rendering.
+- Annotations are page-scoped and rely on valid bounding boxes for overlay rendering. Stored boxes should be as close as possible to the final `text_ref`, not just the original source chunk, and stored anchors should remain aligned with the page-level extracted text.
 - PDF URLs may point to cached Supabase storage, but the PDF API route also preserves arXiv fallback fetching.
 - `ai_summary` is treated as optional in code because older schemas may not have the column yet.
 - KV chat persistence is optional and failure-tolerant.

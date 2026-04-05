@@ -1,13 +1,19 @@
 import json
 import unittest
 
+import fitz
+
 from python_service.main import (
     ANNOTATION_FEWSHOT_EXAMPLES,
     ANNOTATION_REPAIR_FEWSHOT_EXAMPLES,
     ANNOTATION_VALIDATION_FEWSHOT_EXAMPLES,
+    Annotation,
+    BoundingBox,
     MemoryListItem,
     MemoryRecentAnnotation,
     RollingMemoryState,
+    TextAnchor,
+    assign_text_anchors,
     build_deterministic_annotation_brief_lines,
     build_annotation_messages,
     build_annotation_brief_source,
@@ -15,11 +21,14 @@ from python_service.main import (
     build_annotation_repair_messages,
     build_annotation_request_content,
     build_annotation_validation_messages,
+    build_page_sources,
     build_repair_request_content,
     build_validation_request_content,
     compact_rolling_memory,
     filter_chunk_annotations_for_memory,
     infer_section_hint,
+    refine_annotation_bboxes,
+    resolve_text_anchor_for_chunk,
     render_rolling_memory,
     sanitize_extracted_text,
 )
@@ -318,6 +327,85 @@ class AnnotationPromptTests(unittest.TestCase):
     def test_section_hint_inference_is_optional(self) -> None:
         self.assertEqual(infer_section_hint("3 Results"), "Results")
         self.assertIsNone(infer_section_hint("This is a full sentence describing an experiment result in detail."))
+
+    def test_resolve_text_anchor_for_chunk_chooses_occurrence_inside_chunk_range(self) -> None:
+        page_text = "Alpha method appears once.\nBridge text.\nAlpha method appears twice."
+
+        anchor = resolve_text_anchor_for_chunk(page_text, "Alpha method", 40, 65)
+
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.occurrence_index, 1)
+        self.assertEqual(page_text[anchor.page_text_start : anchor.page_text_end], "Alpha method")
+
+    def test_assign_text_anchors_prefers_existing_anchor_hint_for_repeated_terms(self) -> None:
+        first_text = "Alpha method appears once."
+        second_text = "Alpha method appears twice."
+        second_start = len(first_text) + 1
+        blocks = [
+            {
+                "page_number": 1,
+                "text": first_text,
+                "page_text_start": 0,
+                "page_text_end": len(first_text),
+                "bbox": {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.05},
+            },
+            {
+                "page_number": 1,
+                "text": second_text,
+                "page_text_start": second_start,
+                "page_text_end": second_start + len(second_text),
+                "bbox": {"x": 0.1, "y": 0.8, "width": 0.2, "height": 0.05},
+            },
+        ]
+        page_sources = build_page_sources(blocks)
+        annotation = Annotation(
+            type="definition",
+            text_ref="Alpha method",
+            note="Alpha method: a named technique.",
+            importance=2,
+            page_number=1,
+            bbox=BoundingBox(x=0.1, y=0.8, width=0.2, height=0.05),
+            anchor=TextAnchor(
+                page_text_start=second_start,
+                page_text_end=second_start + len("Alpha method"),
+                occurrence_index=1,
+            ),
+        )
+
+        resolved = assign_text_anchors([annotation], page_sources, blocks)[0]
+
+        self.assertIsNotNone(resolved.anchor)
+        self.assertEqual(resolved.anchor.occurrence_index, 1)
+        self.assertEqual(
+            page_sources[1][resolved.anchor.page_text_start : resolved.anchor.page_text_end],
+            "Alpha method",
+        )
+
+    def test_refine_annotation_bboxes_uses_pdf_text_search(self) -> None:
+        pdf_doc = fitz.open()
+        page = pdf_doc.new_page(width=400, height=400)
+        page.insert_text((72, 72), "The Nystrom approximation reduces attention complexity.")
+
+        annotations = [
+            Annotation(
+                type="definition",
+                text_ref="Nystrom approximation",
+                note="Nystrom approximation: a low-rank approximation method.",
+                importance=2,
+                page_number=1,
+                bbox=BoundingBox(x=0, y=0, width=1, height=1),
+            )
+        ]
+
+        refined = refine_annotation_bboxes(annotations, pdf_doc)
+        refined_bbox = refined[0].bbox
+
+        self.assertLess(refined_bbox.width, 1)
+        self.assertLess(refined_bbox.height, 1)
+        self.assertTrue(refined_bbox.fragments)
+        self.assertLessEqual(refined_bbox.fragments[0].width, refined_bbox.width)
+
+        pdf_doc.close()
 
 
 if __name__ == "__main__":

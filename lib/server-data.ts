@@ -4,7 +4,7 @@ import { env } from "./env";
 import { getChatHistory, setChatHistory } from "./kv";
 import { createSupabaseAdminClient } from "./supabase/admin";
 import { createSupabaseServerClient } from "./supabase/server";
-import type { AnnotationRecord, ChatMessage, IngestionPayload, PaperListItem, PaperWorkspace, UserProfile } from "./types";
+import type { AnnotationRecord, ChatMessage, IngestionPayload, PaperListItem, PaperWorkspace, TextAnchor, TextAnchorPayload, UserProfile } from "./types";
 
 const PYTHON_INGEST_TIMEOUT_MS = env.PYTHON_INGEST_TIMEOUT_MS;
 let aiSummaryColumnAvailable: boolean | null = null;
@@ -42,6 +42,7 @@ type AnnotationRow = {
   note: string;
   importance: AnnotationRecord["importance"];
   bbox: AnnotationRecord["bbox"];
+  anchor: TextAnchorPayload | null;
 };
 
 type WorkspacePaperRow = {
@@ -110,7 +111,7 @@ export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace
     fetchPaperWorkspaceRow(supabase, paperId),
     supabase
       .from("annotations")
-      .select("id, paper_id, page_number, type, text_ref, note, importance, bbox")
+      .select("id, paper_id, page_number, type, text_ref, note, importance, bbox, anchor")
       .eq("paper_id", paperId)
       .order("page_number", { ascending: true })
   ]);
@@ -181,7 +182,8 @@ export async function ensurePaperIngested(arxivId: string, userId: string, jobId
         text_ref: annotation.text_ref,
         note: annotation.note,
         importance: annotation.importance,
-        bbox: annotation.bbox
+        bbox: annotation.bbox,
+        anchor: annotation.anchor ?? null
       }))
     );
 
@@ -250,7 +252,20 @@ function mapAnnotationRow(row: AnnotationRow): AnnotationRecord {
     textRef: row.text_ref,
     note: row.note,
     importance: row.importance,
-    bbox: row.bbox
+    bbox: row.bbox,
+    anchor: mapTextAnchor(row.anchor)
+  };
+}
+
+function mapTextAnchor(anchor: TextAnchorPayload | null | undefined): TextAnchor | null {
+  if (!anchor) {
+    return null;
+  }
+
+  return {
+    pageTextStart: anchor.page_text_start,
+    pageTextEnd: anchor.page_text_end,
+    occurrenceIndex: anchor.occurrence_index
   };
 }
 
@@ -428,7 +443,8 @@ async function upgradePaperFromPipeline(
       text_ref: annotation.text_ref,
       note: annotation.note,
       importance: annotation.importance,
-      bbox: annotation.bbox
+      bbox: annotation.bbox,
+      anchor: annotation.anchor ?? null
     }))
   );
 
@@ -458,15 +474,10 @@ async function resolvePreferredPaperPdfUrl(
     return data.signedUrl;
   }
 
-  if (isArxivUrl(fallbackUrl)) {
-    throw new Error("Cached PDF unavailable for this paper. Reprocess avoids arXiv and needs a stored PDF.");
-  }
-
+  // Older papers or missing storage objects may only have an arXiv PDF URL.
+  // Reprocess should fall back to that source and let the normal cache step
+  // restore the stored copy after a successful pipeline run.
   return fallbackUrl;
-}
-
-function isArxivUrl(url: string) {
-  return /https?:\/\/(?:www\.|export\.)?arxiv\.org\//i.test(url);
 }
 
 async function ensurePaperSummary(paper: WorkspacePaperRow): Promise<string | null> {

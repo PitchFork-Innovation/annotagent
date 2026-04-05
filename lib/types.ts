@@ -1,10 +1,26 @@
 export type AnnotationType = "highlight" | "note" | "definition";
 
-export type BoundingBox = {
+export type HighlightFragment = {
   x: number;
   y: number;
   width: number;
   height: number;
+};
+
+export type BoundingBox = HighlightFragment & {
+  fragments?: HighlightFragment[];
+};
+
+export type TextAnchor = {
+  pageTextStart: number;
+  pageTextEnd: number;
+  occurrenceIndex: number;
+};
+
+export type TextAnchorPayload = {
+  page_text_start: number;
+  page_text_end: number;
+  occurrence_index: number;
 };
 
 export type AnnotationRecord = {
@@ -16,6 +32,7 @@ export type AnnotationRecord = {
   note: string;
   importance: 1 | 2 | 3;
   bbox: BoundingBox;
+  anchor?: TextAnchor | null;
 };
 
 export type PaperRecord = {
@@ -70,5 +87,6 @@ export type IngestionPayload = {
     note: string;
     importance: 1 | 2 | 3;
     bbox: BoundingBox;
+    anchor?: TextAnchorPayload | null;
   }>;
 };

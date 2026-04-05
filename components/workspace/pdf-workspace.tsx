@@ -381,7 +381,7 @@ function AnnotationOverlay({
     };
   }, [annotations, pageRootRef]);
 
-  const overlapLanes = useMemo(() => assignOverlapLanes(annotations, layouts), [annotations, layouts]);
+  const stackOrder = useMemo(() => assignAnnotationStackOrder(annotations, layouts), [annotations, layouts]);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
@@ -391,7 +391,7 @@ function AnnotationOverlay({
           active={activeAnnotationId === annotation.id}
           annotation={annotation}
           layout={layouts[annotation.id]}
-          lane={overlapLanes[annotation.id] ?? 0}
+          stackOrder={stackOrder[annotation.id] ?? 0}
           onOpen={(coords) => onOpen(annotation, coords)}
           onActiveChange={(isActive) => setActiveAnnotationId(isActive ? annotation.id : null)}
         />
@@ -425,21 +425,20 @@ function AnnotationHighlight({
   active,
   annotation,
   layout,
-  lane,
+  stackOrder,
   onOpen,
   onActiveChange
 }: {
   active: boolean;
   annotation: AnnotationRecord;
   layout?: ResolvedAnnotationLayout;
-  lane: number;
+  stackOrder: number;
   onOpen: (coords: { x: number; y: number }) => void;
   onActiveChange: (isActive: boolean) => void;
 }) {
   const tone = annotationTone(annotation.type);
   const style = importanceStyle(annotation.importance);
   const resolvedLayout = layout ?? createFallbackLayout(annotation.bbox);
-  const laneOffset = lane * 0.008;
 
   return (
     <>
@@ -450,10 +449,10 @@ function AnnotationHighlight({
           className="pointer-events-auto absolute cursor-pointer rounded-[4px] transition-transform hover:scale-[1.01] focus:scale-[1.01]"
           style={{
             left: `${fragment.x * 100}%`,
-            top: `${(fragment.y + laneOffset) * 100}%`,
+            top: `${fragment.y * 100}%`,
             width: `${fragment.width * 100}%`,
             height: `${fragment.height * 100}%`,
-            zIndex: active ? 30 : 10 + lane
+            zIndex: active ? 60 : 10 + stackOrder
           }}
           title={annotation.note}
           type="button"
@@ -465,7 +464,7 @@ function AnnotationHighlight({
             event.stopPropagation();
             onOpen({
               x: resolvedLayout.anchorX,
-              y: resolvedLayout.anchorY + laneOffset
+              y: resolvedLayout.anchorY
             });
           }}
         >
@@ -647,77 +646,183 @@ function resolveAnnotationLayout(annotation: AnnotationRecord, pageRoot: HTMLDiv
     return createFallbackLayout(annotation.bbox);
   }
 
-  const matchedFragments = matchTextLayerFragments(annotation.textRef, textLayer, pageRoot);
+  const matchedFragments = matchTextLayerFragments(annotation, textLayer, pageRoot);
   return matchedFragments ? buildResolvedLayout(matchedFragments) : createFallbackLayout(annotation.bbox);
 }
 
-function matchTextLayerFragments(query: string, textLayer: Element, pageRoot: HTMLDivElement): HighlightFragment[] | null {
-  const normalizedQuery = normalizeText(query);
+type TextLayerSegment = {
+  element: HTMLSpanElement;
+  normalizedStart: number;
+  normalizedEnd: number;
+  rawMap: Array<{ start: number; end: number }>;
+};
+
+type TextLayerMatch = {
+  fragments: HighlightFragment[];
+  bounds: LayoutBounds;
+};
+
+function matchTextLayerFragments(
+  annotation: AnnotationRecord,
+  textLayer: Element,
+  pageRoot: HTMLDivElement
+): HighlightFragment[] | null {
+  const normalizedQuery = normalizeText(annotation.textRef);
   if (!normalizedQuery) {
     return null;
   }
 
-  const queryWords = normalizedQuery.split(" ").filter((word) => word.length > 2).slice(0, 6);
-  const queryTarget = normalizedQuery.slice(0, Math.min(normalizedQuery.length, 120));
-  const spans = Array.from(textLayer.querySelectorAll("span"))
-    .map((span) => ({
-      element: span,
-      text: normalizeText(span.textContent ?? "")
-    }))
-    .filter((span) => span.text);
-
-  const rootRect = pageRoot.getBoundingClientRect();
-
-  for (let index = 0; index < spans.length; index += 1) {
-    const span = spans[index];
-    const wordMatch =
-      queryWords.length === 0 || queryWords.some((word) => span.text.includes(word) || word.includes(span.text));
-    if (!wordMatch) {
-      continue;
-    }
-
-    const matchedElements = [span.element];
-    let combinedText = span.text;
-    const lineBuckets = new Set([Math.round(span.element.getBoundingClientRect().top / 6)]);
-
-    if (combinedText.includes(queryTarget)) {
-      return buildHighlightFragments(matchedElements, rootRect);
-    }
-
-    for (let nextIndex = index + 1; nextIndex < spans.length && matchedElements.length < 24; nextIndex += 1) {
-      const nextSpan = spans[nextIndex];
-      const nextRect = nextSpan.element.getBoundingClientRect();
-      lineBuckets.add(Math.round(nextRect.top / 6));
-      if (lineBuckets.size > 5) {
-        break;
-      }
-
-      matchedElements.push(nextSpan.element);
-      combinedText = `${combinedText} ${nextSpan.text}`.trim();
-
-      if (combinedText.includes(queryTarget)) {
-        return buildHighlightFragments(matchedElements, rootRect);
-      }
-
-      if (combinedText.length > normalizedQuery.length + 160) {
-        break;
-      }
-    }
-  }
-
-  return null;
-}
-
-function buildHighlightFragments(elements: Element[], rootRect: DOMRect): HighlightFragment[] | null {
-  const rects = elements
-    .map((element) => element.getBoundingClientRect())
-    .filter((rect) => rect.width > 0 && rect.height > 0);
-
-  if (rects.length === 0 || rootRect.width === 0 || rootRect.height === 0) {
+  const textIndex = buildTextLayerIndex(textLayer);
+  if (!textIndex.pageText) {
     return null;
   }
 
-  const mergedRects = rects
+  const matches = findNormalizedOccurrences(textIndex.pageText, normalizedQuery)
+    .map((start) => buildTextLayerMatch(start, start + normalizedQuery.length, textIndex.segments, pageRoot))
+    .filter((candidate): candidate is TextLayerMatch => Boolean(candidate));
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  return selectBestTextLayerMatch(matches, annotation).fragments;
+}
+
+function buildTextLayerIndex(textLayer: Element): {
+  pageText: string;
+  segments: TextLayerSegment[];
+} {
+  let pageText = "";
+  const segments: TextLayerSegment[] = [];
+
+  for (const span of Array.from(textLayer.querySelectorAll("span"))) {
+    const normalized = normalizeTextWithMapping(span.textContent ?? "");
+    if (!normalized.text) {
+      continue;
+    }
+
+    if (pageText) {
+      pageText += " ";
+    }
+
+    const normalizedStart = pageText.length;
+    pageText += normalized.text;
+    segments.push({
+      element: span as HTMLSpanElement,
+      normalizedStart,
+      normalizedEnd: pageText.length,
+      rawMap: normalized.rawMap
+    });
+  }
+
+  return { pageText, segments };
+}
+
+function findNormalizedOccurrences(source: string, query: string): number[] {
+  const matches: number[] = [];
+  let startIndex = 0;
+
+  while (startIndex < source.length) {
+    const matchIndex = source.indexOf(query, startIndex);
+    if (matchIndex === -1) {
+      break;
+    }
+
+    const atWordStart = matchIndex === 0 || source[matchIndex - 1] === " ";
+    const matchEnd = matchIndex + query.length;
+    const atWordEnd = matchEnd >= source.length || source[matchEnd] === " ";
+    if (atWordStart && atWordEnd) {
+      matches.push(matchIndex);
+    }
+
+    startIndex = matchIndex + 1;
+  }
+
+  return matches;
+}
+
+function buildTextLayerMatch(
+  matchStart: number,
+  matchEnd: number,
+  segments: TextLayerSegment[],
+  pageRoot: HTMLDivElement
+): TextLayerMatch | null {
+  const rootRect = pageRoot.getBoundingClientRect();
+  const rects: DOMRect[] = [];
+
+  for (const segment of segments) {
+    if (segment.normalizedEnd <= matchStart || segment.normalizedStart >= matchEnd) {
+      continue;
+    }
+
+    const localStart = Math.max(matchStart, segment.normalizedStart) - segment.normalizedStart;
+    const localEnd = Math.min(matchEnd, segment.normalizedEnd) - segment.normalizedStart;
+    rects.push(...getSegmentMatchRects(segment, localStart, localEnd));
+  }
+
+  const fragments = rectsToHighlightFragments(rects, rootRect);
+  if (!fragments) {
+    return null;
+  }
+
+  return {
+    fragments,
+    bounds: getBoundsFromFragments(fragments)
+  };
+}
+
+function getSegmentMatchRects(segment: TextLayerSegment, start: number, end: number): DOMRect[] {
+  if (start >= end) {
+    return [];
+  }
+
+  const textNode = segment.element.firstChild;
+  if (!(textNode instanceof Text)) {
+    return [segment.element.getBoundingClientRect()];
+  }
+
+  const rawStart = segment.rawMap[start]?.start;
+  const rawEnd = segment.rawMap[end - 1]?.end;
+  if (rawStart === undefined || rawEnd === undefined || rawStart >= rawEnd) {
+    return [];
+  }
+
+  const range = document.createRange();
+  range.setStart(textNode, rawStart);
+  range.setEnd(textNode, rawEnd);
+  return Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function selectBestTextLayerMatch(matches: TextLayerMatch[], annotation: AnnotationRecord): TextLayerMatch {
+  const anchoredMatch = annotation.anchor ? matches[annotation.anchor.occurrenceIndex] : undefined;
+  if (anchoredMatch) {
+    return anchoredMatch;
+  }
+
+  const bbox = annotation.bbox;
+  const targetX = bbox.x + bbox.width / 2;
+  const targetY = bbox.y + bbox.height / 2;
+
+  return matches.reduce((best, candidate) => {
+    const bestDistance = getBoundsCenterDistance(best.bounds, targetX, targetY);
+    const candidateDistance = getBoundsCenterDistance(candidate.bounds, targetX, targetY);
+
+    if (candidateDistance !== bestDistance) {
+      return candidateDistance < bestDistance ? candidate : best;
+    }
+
+    return getBoundsArea(candidate.bounds) < getBoundsArea(best.bounds) ? candidate : best;
+  });
+}
+
+function rectsToHighlightFragments(rects: DOMRect[], rootRect: DOMRect): HighlightFragment[] | null {
+  const visibleRects = rects.filter((rect) => rect.width > 0 && rect.height > 0);
+
+  if (visibleRects.length === 0 || rootRect.width === 0 || rootRect.height === 0) {
+    return null;
+  }
+
+  const mergedRects = visibleRects
     .sort((leftRect, rightRect) => {
       if (Math.abs(leftRect.top - rightRect.top) < 6) {
         return leftRect.left - rightRect.left;
@@ -754,10 +859,7 @@ function buildHighlightFragments(elements: Element[], rootRect: DOMRect): Highli
 }
 
 function buildResolvedLayout(fragments: HighlightFragment[]): ResolvedAnnotationLayout {
-  const left = Math.min(...fragments.map((fragment) => fragment.x));
-  const top = Math.min(...fragments.map((fragment) => fragment.y));
-  const right = Math.max(...fragments.map((fragment) => fragment.x + fragment.width));
-  const bottom = Math.max(...fragments.map((fragment) => fragment.y + fragment.height));
+  const { left, top, right, bottom } = getBoundsFromFragments(fragments);
 
   return {
     fragments,
@@ -767,17 +869,21 @@ function buildResolvedLayout(fragments: HighlightFragment[]): ResolvedAnnotation
 }
 
 function createFallbackLayout(bbox: AnnotationRecord["bbox"]): ResolvedAnnotationLayout {
-  return buildResolvedLayout([
-    {
-      x: bbox.x,
-      y: bbox.y,
-      width: bbox.width,
-      height: bbox.height
-    }
-  ]);
+  const fragments = bbox.fragments?.length
+    ? bbox.fragments
+    : [
+        {
+          x: bbox.x,
+          y: bbox.y,
+          width: bbox.width,
+          height: bbox.height
+        }
+      ];
+
+  return buildResolvedLayout(fragments);
 }
 
-function assignOverlapLanes(
+function assignAnnotationStackOrder(
   annotations: AnnotationRecord[],
   layouts: Record<string, ResolvedAnnotationLayout>
 ): Record<string, number> {
@@ -786,36 +892,36 @@ function assignOverlapLanes(
     bounds: getLayoutBounds(layouts[annotation.id] ?? createFallbackLayout(annotation.bbox))
   }));
 
-  positioned.sort((left, right) => {
-    if (left.bounds.top !== right.bounds.top) {
-      return left.bounds.top - right.bounds.top;
-    }
-
-    return left.bounds.left - right.bounds.left;
-  });
-
-  const laneMap: Record<string, number> = {};
-  const activeGroups: Array<{ lane: number; bounds: LayoutBounds }> = [];
-
-  for (const item of positioned) {
-    for (let index = activeGroups.length - 1; index >= 0; index -= 1) {
-      if (activeGroups[index].bounds.bottom < item.bounds.top - 0.004) {
-        activeGroups.splice(index, 1);
+  const stackSorted = positioned
+    .map((item) => ({
+      ...item,
+      area: getBoundsArea(item.bounds),
+      width: item.bounds.right - item.bounds.left,
+      containmentDepth: positioned.filter(
+        (other) => other.id !== item.id && boundsContain(other.bounds, item.bounds)
+      ).length
+    }))
+    .sort((left, right) => {
+      if (left.containmentDepth !== right.containmentDepth) {
+        return left.containmentDepth - right.containmentDepth;
       }
-    }
 
-    let lane = 0;
-    while (
-      activeGroups.some((group) => group.lane === lane && boundsOverlap(group.bounds, item.bounds))
-    ) {
-      lane += 1;
-    }
+      if (left.area !== right.area) {
+        return right.area - left.area;
+      }
 
-    laneMap[item.id] = lane;
-    activeGroups.push({ lane, bounds: item.bounds });
-  }
+      if (left.width !== right.width) {
+        return right.width - left.width;
+      }
 
-  return laneMap;
+      if (left.bounds.top !== right.bounds.top) {
+        return left.bounds.top - right.bounds.top;
+      }
+
+      return left.bounds.left - right.bounds.left;
+    });
+
+  return Object.fromEntries(stackSorted.map((item, index) => [item.id, index]));
 }
 
 type LayoutBounds = {
@@ -826,24 +932,70 @@ type LayoutBounds = {
 };
 
 function getLayoutBounds(layout: ResolvedAnnotationLayout): LayoutBounds {
-  const left = Math.min(...layout.fragments.map((fragment) => fragment.x));
-  const right = Math.max(...layout.fragments.map((fragment) => fragment.x + fragment.width));
-  const top = Math.min(...layout.fragments.map((fragment) => fragment.y));
-  const bottom = Math.max(...layout.fragments.map((fragment) => fragment.y + fragment.height));
+  return getBoundsFromFragments(layout.fragments);
+}
+
+function getBoundsFromFragments(fragments: HighlightFragment[]): LayoutBounds {
+  const left = Math.min(...fragments.map((fragment) => fragment.x));
+  const right = Math.max(...fragments.map((fragment) => fragment.x + fragment.width));
+  const top = Math.min(...fragments.map((fragment) => fragment.y));
+  const bottom = Math.max(...fragments.map((fragment) => fragment.y + fragment.height));
 
   return { top, bottom, left, right };
 }
 
-function boundsOverlap(left: LayoutBounds, right: LayoutBounds) {
-  const verticalOverlap = left.top <= right.bottom && right.top <= left.bottom;
-  const horizontalOverlap = left.left <= right.right && right.left <= left.right;
-  return verticalOverlap && horizontalOverlap;
+function boundsContain(container: LayoutBounds, candidate: LayoutBounds) {
+  const tolerance = 0.001;
+  return (
+    container.left <= candidate.left + tolerance &&
+    container.right >= candidate.right - tolerance &&
+    container.top <= candidate.top + tolerance &&
+    container.bottom >= candidate.bottom - tolerance
+  );
 }
 
 function normalizeText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeTextWithMapping(value).text;
+}
+
+function normalizeTextWithMapping(value: string): {
+  text: string;
+  rawMap: Array<{ start: number; end: number }>;
+} {
+  const characters: string[] = [];
+  const rawMap: Array<{ start: number; end: number }> = [];
+  let pendingSpaceIndex: number | null = null;
+  let rawIndex = 0;
+
+  for (const char of value) {
+    if (/[\p{L}\p{N}]/u.test(char)) {
+      if (pendingSpaceIndex !== null && characters.length > 0) {
+        characters.push(" ");
+        rawMap.push({ start: pendingSpaceIndex, end: pendingSpaceIndex + 1 });
+        pendingSpaceIndex = null;
+      }
+
+      characters.push(char.toLowerCase());
+      rawMap.push({ start: rawIndex, end: rawIndex + char.length });
+    } else if (characters.length > 0 && pendingSpaceIndex === null) {
+      pendingSpaceIndex = rawIndex;
+    }
+
+    rawIndex += char.length;
+  }
+
+  return {
+    text: characters.join(""),
+    rawMap
+  };
+}
+
+function getBoundsCenterDistance(bounds: LayoutBounds, targetX: number, targetY: number) {
+  const centerX = (bounds.left + bounds.right) / 2;
+  const centerY = (bounds.top + bounds.bottom) / 2;
+  return Math.hypot(centerX - targetX, centerY - targetY);
+}
+
+function getBoundsArea(bounds: LayoutBounds) {
+  return Math.max(bounds.right - bounds.left, 0) * Math.max(bounds.bottom - bounds.top, 0);
 }

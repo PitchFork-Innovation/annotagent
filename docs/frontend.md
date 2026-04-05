@@ -32,7 +32,8 @@
 - Browser-only libraries like `react-pdf` stay in client components and are dynamically loaded where needed.
 
 ## Core Invariants
-- PDF overlay alignment depends on annotation bounding boxes matching the rendered page coordinate system. Avoid casual changes to scaling or overlay positioning.
+- PDF overlay alignment depends on annotation bounding boxes matching the rendered page coordinate system. The reader now prefers deterministic text anchors and exact text-layer range matches, then falls back to stored bbox fragments from ingestion, so avoid casual changes to scaling, text-layer querying, or overlay positioning.
+- Overlapping annotations should remain geometrically aligned to the underlying text. Prefer stack ordering over visual y-offsets so narrower contained highlights stay visible without shifting off the text they annotate.
 - Annotation interaction is currently a single-popup model. Escape and outside click both close the active popup.
 - The inquiry panel is collapsible, stateful, and scoped to a single paper.
 - Workspace rendering assumes one `PaperWorkspace` object with `paper`, `annotations`, and `chatHistory`.

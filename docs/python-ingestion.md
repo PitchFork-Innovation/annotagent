@@ -18,6 +18,7 @@
 - Fetch the paper PDF.
 - Extract text blocks and bounding boxes with PyMuPDF.
 - Clean extracted text and split it into paragraph-scale chunks.
+- Build stable page-level text sources and offsets from the extracted blocks before chunking so annotations can be anchored to a deterministic page text stream.
 - Infer lightweight section hints from heading-like blocks when possible.
 - Build a representative whole-paper brief from sampled chunks across the paper.
 - Send chunks through OpenAI annotation generation prompts.
@@ -28,6 +29,7 @@
 - Maintain and compress the rolling memory deterministically in Python so prompt context stays concise without extra OpenAI calls.
 - Repair malformed annotation output when needed.
 - Validate and deduplicate annotations across the full paper.
+- Resolve validated `text_ref` strings into deterministic page-text anchors, then back onto the PDF with PyMuPDF so stored bounding boxes are term- or phrase-level rather than chunk-level whenever possible.
 - Generate a paper summary for the frontend summary card and stored `ai_summary`.
 - Emit progress updates keyed by `jobId` so the Next.js app can poll status.
 
@@ -41,6 +43,8 @@
 - Highlights and notes should usually stay under 15 words.
 - Brevity matters because frontend overlays and duplicate detection work better with short exact references.
 - Each returned annotation must remain consistent with page number and bounding box placement.
+- Final annotations should also carry a deterministic text anchor for repeated-term disambiguation: page-text start, page-text end, and occurrence index on that page.
+- Final stored `bbox` values should be refined from the exact surviving `text_ref` on that PDF page when search succeeds; chunk-level boxes are only a fallback.
 
 ## Model And Env Controls
 - Defaults currently fall back to `gpt-4o-mini` for annotations and summaries unless env overrides are set.

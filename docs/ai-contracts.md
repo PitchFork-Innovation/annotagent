@@ -34,13 +34,14 @@
   - `text_ref`
   - `note`
   - `importance`
-  - plus page and bbox data in the final payload
+  - plus page, deterministic text-anchor, and precise `bbox` data in the final payload
 - Shared prompt rules emphasize:
   - fewer stronger annotations
   - no filler
   - shortest exact quotes
   - concise notes that add interpretation rather than paraphrase
   - definition notes beginning with `<TERM>:`
+- After validation, Python deterministically resolves each surviving `text_ref` into page-level offsets plus occurrence index, then maps that anchor back onto the PDF and stores a tighter fallback bbox (with optional fragment rects).
 - Chunk annotation prompts now keep the same few-shot and system structure while adding bounded live context:
   - one representative whole-paper brief built locally from the abstract and sampled chunks
   - a rolling in-memory memory block built from earlier chunk outputs

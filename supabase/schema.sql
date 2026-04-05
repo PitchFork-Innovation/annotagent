@@ -22,10 +22,12 @@ create table if not exists annotations (
   note text not null,
   importance integer not null check (importance between 1 and 3),
   bbox jsonb not null,
+  anchor jsonb,
   created_at timestamptz not null default now()
 );
 
 alter table papers add column if not exists ai_summary text;
+alter table annotations add column if not exists anchor jsonb;
 
 create table if not exists user_papers (
   user_id uuid not null references auth.users(id) on delete cascade,

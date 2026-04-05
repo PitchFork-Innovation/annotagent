@@ -60,6 +60,8 @@ DEFINED_TERMS_LIMIT = int(os.getenv("ROLLING_MEMORY_DEFINED_TERMS_LIMIT", "12"))
 COVERED_TOPICS_LIMIT = int(os.getenv("ROLLING_MEMORY_COVERED_TOPICS_LIMIT", "12"))
 RECENT_ANNOTATIONS_LIMIT = int(os.getenv("ROLLING_MEMORY_RECENT_ANNOTATIONS_LIMIT", "5"))
 BLOCKED_TEXT_REFS_LIMIT = 24
+CHUNK_SIZE = 1400
+CHUNK_OVERLAP = 120
 
 ANNOTATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
@@ -496,11 +498,21 @@ class SummaryRequest(BaseModel):
     fullText: str = Field(min_length=1)
 
 
-class BoundingBox(BaseModel):
+class HighlightFragment(BaseModel):
     x: float
     y: float
     width: float
     height: float
+
+
+class BoundingBox(HighlightFragment):
+    fragments: list[HighlightFragment] = Field(default_factory=list)
+
+
+class TextAnchor(BaseModel):
+    page_text_start: int
+    page_text_end: int
+    occurrence_index: int
 
 
 class Annotation(BaseModel):
@@ -510,6 +522,7 @@ class Annotation(BaseModel):
     importance: Literal[1, 2, 3]
     bbox: BoundingBox
     page_number: int
+    anchor: TextAnchor | None = None
 
 
 class MemoryListItem(BaseModel):
@@ -705,6 +718,7 @@ async def run_annotation_pipeline(
     write_progress(job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
     logger.info("Chunking extracted text for %s", arxiv_id)
     chunks = chunk_blocks(blocks)
+    page_sources = build_page_sources(blocks)
     logger.info(
         "Extracted %s blocks and %s chunks for %s",
         len(blocks),
@@ -721,7 +735,7 @@ async def run_annotation_pipeline(
             "totalChunks": len(chunks),
         },
     )
-    annotations = annotate_chunks(chunks, title=title, abstract=abstract, job_id=job_id)
+    annotations = annotate_chunks(chunks, blocks, page_sources, pdf_doc, title=title, abstract=abstract, job_id=job_id)
     logger.info("Produced %s annotations for %s", len(annotations), arxiv_id)
     write_progress(
         job_id,
@@ -753,6 +767,7 @@ def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
     for page_index in range(pdf_doc.page_count):
         page = pdf_doc.load_page(page_index)
         page_rect = page.rect
+        page_text_offset = 0
         for block in page.get_text("blocks"):
             x0, y0, x1, y1, text, *_ = block
             cleaned = " ".join(sanitize_extracted_text(text or "").split())
@@ -763,11 +778,19 @@ def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
             inferred_section_hint = infer_section_hint(cleaned)
             if inferred_section_hint:
                 current_section_hint = inferred_section_hint
+
+            if page_text_offset:
+                page_text_offset += 1
+
+            page_text_start = page_text_offset
+            page_text_end = page_text_start + len(cleaned)
             blocks.append(
                 {
                     "page_number": page_index + 1,
                     "text": cleaned,
                     "section_hint": current_section_hint,
+                    "page_text_start": page_text_start,
+                    "page_text_end": page_text_end,
                     "bbox": {
                         "x": x0 / page_rect.width,
                         "y": y0 / page_rect.height,
@@ -776,6 +799,7 @@ def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
                     },
                 }
             )
+            page_text_offset = page_text_end
     return blocks
 
 
@@ -810,17 +834,24 @@ def sanitize_prompt_value(value: object) -> object:
 
 
 def chunk_blocks(blocks: list[dict]) -> list[dict]:
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1400, chunk_overlap=120)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks: list[dict] = []
     for block in blocks:
+        search_from = 0
         for split_text in splitter.split_text(block["text"]):
             if should_skip_chunk(split_text):
                 continue
+
+            chunk_start_in_block = find_split_text_start(block["text"], split_text, search_from)
+            chunk_end_in_block = chunk_start_in_block + len(split_text)
+            search_from = max(chunk_start_in_block + 1, chunk_end_in_block - CHUNK_OVERLAP)
             chunks.append(
                 {
                     "page_number": block["page_number"],
                     "text": split_text,
                     "section_hint": block.get("section_hint"),
+                    "page_text_start": block["page_text_start"] + chunk_start_in_block,
+                    "page_text_end": block["page_text_start"] + chunk_end_in_block,
                     "bbox": block["bbox"],
                 }
             )
@@ -829,6 +860,9 @@ def chunk_blocks(blocks: list[dict]) -> list[dict]:
 
 def annotate_chunks(
     chunks: list[dict],
+    blocks: list[dict],
+    page_sources: dict[int, str],
+    pdf_doc: fitz.Document,
     *,
     title: str,
     abstract: str,
@@ -924,6 +958,12 @@ def annotate_chunks(
                         importance=item["importance"],
                         bbox=BoundingBox(**chunk["bbox"]),
                         page_number=chunk["page_number"],
+                        anchor=resolve_text_anchor_for_chunk(
+                            page_sources.get(chunk["page_number"], ""),
+                            normalized_text_ref,
+                            chunk["page_text_start"],
+                            chunk["page_text_end"],
+                        ),
                     )
                 )
         except Exception as error:
@@ -958,13 +998,15 @@ def annotate_chunks(
         len(annotations) - len(deduped_annotations),
         summarize_annotations(deduped_annotations),
     )
-    validated_annotations = validate_annotations(client, model_name, deduped_annotations, chunks)
+    validated_annotations = validate_annotations(client, model_name, deduped_annotations, page_sources)
     logger.info(
         "After LLM validation: %s annotations remain: %s",
         len(validated_annotations),
         summarize_annotations(validated_annotations),
     )
-    final_annotations = locally_validate_annotations(validated_annotations, chunks)
+    final_annotations = locally_validate_annotations(validated_annotations, page_sources)
+    final_annotations = assign_text_anchors(final_annotations, page_sources, blocks)
+    final_annotations = refine_annotation_bboxes(final_annotations, pdf_doc)
     logger.info(
         "After local validation: %s annotations remain (%s removed): %s",
         len(final_annotations),
@@ -1501,12 +1543,11 @@ def validate_annotations(
     client: OpenAI,
     model_name: str,
     annotations: list[Annotation],
-    chunks: list[dict],
+    page_sources: dict[int, str],
 ) -> list[Annotation]:
     if not annotations:
         return []
 
-    page_sources = build_page_sources(chunks)
     validated_annotations: list[Annotation] = []
     for page_number, page_annotations in annotations_grouped_by_page(annotations).items():
         page_source = page_sources.get(page_number, "")
@@ -1521,7 +1562,7 @@ def validate_annotations(
             temperature=0,
             messages=build_annotation_validation_messages(
                 {page_number: page_source},
-                [annotation.model_dump(mode="json") for annotation in page_annotations],
+                [serialize_annotation_for_validation(annotation) for annotation in page_annotations],
             ),
         )
 
@@ -1547,6 +1588,7 @@ def validate_annotations(
                         importance=item["importance"],
                         bbox=annotations_by_page_number(page_annotations, item["page_number"], item["text_ref"]),
                         page_number=item["page_number"],
+                        anchor=annotation_anchor_by_page_number(page_annotations, item["page_number"], item["text_ref"]),
                     )
                 )
             except Exception:
@@ -1563,15 +1605,188 @@ def validate_annotations(
     return validated_annotations or annotations
 
 
-def build_page_sources(chunks: list[dict]) -> dict[int, str]:
+def build_page_sources(blocks: list[dict]) -> dict[int, str]:
     page_sources: dict[int, list[str]] = {}
-    for chunk in chunks:
-        page_sources.setdefault(chunk["page_number"], []).append(chunk["text"])
+    for block in blocks:
+        page_sources.setdefault(block["page_number"], []).append(block["text"])
 
     return {
         page_number: "\n".join(texts)
         for page_number, texts in page_sources.items()
     }
+
+
+def serialize_annotation_for_validation(annotation: Annotation) -> dict[str, object]:
+    return {
+        "type": annotation.type,
+        "text_ref": annotation.text_ref,
+        "note": annotation.note,
+        "importance": annotation.importance,
+        "page_number": annotation.page_number,
+    }
+
+
+def find_split_text_start(block_text: str, split_text: str, search_from: int) -> int:
+    start = block_text.find(split_text, max(search_from - CHUNK_OVERLAP, 0))
+    if start != -1:
+        return start
+
+    fallback = block_text.find(split_text)
+    if fallback != -1:
+        return fallback
+
+    return max(min(search_from, len(block_text)), 0)
+
+
+def resolve_text_anchor_for_chunk(
+    page_text: str,
+    text_ref: str,
+    chunk_page_text_start: int,
+    chunk_page_text_end: int,
+) -> TextAnchor | None:
+    occurrences = find_text_occurrences(page_text, text_ref)
+    if not occurrences:
+        return None
+
+    target_center = (chunk_page_text_start + chunk_page_text_end) / 2
+    best_index, best_span = min(
+        enumerate(occurrences),
+        key=lambda item: (
+            0 if spans_overlap(item[1], (chunk_page_text_start, chunk_page_text_end)) else 1,
+            abs(span_center(item[1]) - target_center),
+            item[0],
+        ),
+    )
+    return TextAnchor(
+        page_text_start=best_span[0],
+        page_text_end=best_span[1],
+        occurrence_index=best_index,
+    )
+
+
+def assign_text_anchors(
+    annotations: list[Annotation],
+    page_sources: dict[int, str],
+    blocks: list[dict],
+) -> list[Annotation]:
+    blocks_by_page = blocks_grouped_by_page(blocks)
+
+    for annotation in annotations:
+        page_text = page_sources.get(annotation.page_number, "")
+        page_blocks = blocks_by_page.get(annotation.page_number, [])
+        resolved_anchor = resolve_text_anchor_for_annotation(annotation, page_text, page_blocks)
+        if resolved_anchor is not None:
+            annotation.anchor = resolved_anchor
+
+    return annotations
+
+
+def resolve_text_anchor_for_annotation(
+    annotation: Annotation,
+    page_text: str,
+    page_blocks: list[dict],
+) -> TextAnchor | None:
+    occurrences = find_text_occurrences(page_text, annotation.text_ref)
+    if not occurrences:
+        return None
+
+    hinted_span = None
+    if annotation.anchor is not None:
+        hinted_span = (annotation.anchor.page_text_start, annotation.anchor.page_text_end)
+
+    current_bbox = annotation.bbox
+    target_center = (current_bbox.x + (current_bbox.width / 2), current_bbox.y + (current_bbox.height / 2))
+
+    ranked_occurrences = []
+    for occurrence_index, span in enumerate(occurrences):
+        span_bbox = resolve_span_bbox_from_blocks(span, page_blocks)
+        span_center = (
+            span_bbox["x"] + (span_bbox["width"] / 2),
+            span_bbox["y"] + (span_bbox["height"] / 2),
+        ) if span_bbox is not None else (0.0, 0.0)
+
+        ranked_occurrences.append(
+            (
+                (
+                    0 if hinted_span is not None and spans_overlap(span, hinted_span) else 1,
+                    abs(span_center_value(span) - span_center_value(hinted_span)) if hinted_span is not None else 0,
+                    0 if span_bbox is not None else 1,
+                    rect_center_distance_2d(span_center, target_center) if span_bbox is not None else 0,
+                    occurrence_index,
+                ),
+                occurrence_index,
+                span,
+            )
+        )
+
+    _, best_occurrence_index, best_span = min(ranked_occurrences, key=lambda item: item[0])
+    return TextAnchor(
+        page_text_start=best_span[0],
+        page_text_end=best_span[1],
+        occurrence_index=best_occurrence_index,
+    )
+
+
+def find_text_occurrences(page_text: str, text_ref: str) -> list[tuple[int, int]]:
+    if not page_text or not text_ref:
+        return []
+
+    matches: list[tuple[int, int]] = []
+    start = 0
+    while start < len(page_text):
+        index = page_text.find(text_ref, start)
+        if index == -1:
+            break
+        matches.append((index, index + len(text_ref)))
+        start = index + 1
+    return matches
+
+
+def blocks_grouped_by_page(blocks: list[dict]) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {}
+    for block in blocks:
+        grouped.setdefault(block["page_number"], []).append(block)
+    return grouped
+
+
+def resolve_span_bbox_from_blocks(span: tuple[int, int], page_blocks: list[dict]) -> dict[str, float] | None:
+    overlapping_blocks = [
+        block
+        for block in page_blocks
+        if spans_overlap(span, (block["page_text_start"], block["page_text_end"]))
+    ]
+
+    if not overlapping_blocks:
+        return None
+
+    left = min(block["bbox"]["x"] for block in overlapping_blocks)
+    top = min(block["bbox"]["y"] for block in overlapping_blocks)
+    right = max(block["bbox"]["x"] + block["bbox"]["width"] for block in overlapping_blocks)
+    bottom = max(block["bbox"]["y"] + block["bbox"]["height"] for block in overlapping_blocks)
+    return {
+        "x": left,
+        "y": top,
+        "width": right - left,
+        "height": bottom - top,
+    }
+
+
+def spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def span_center(span: tuple[int, int]) -> float:
+    return (span[0] + span[1]) / 2
+
+
+def span_center_value(span: tuple[int, int] | None) -> float:
+    if span is None:
+        return 0
+    return span_center(span)
+
+
+def rect_center_distance_2d(left: tuple[float, float], right: tuple[float, float]) -> float:
+    return ((left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2) ** 0.5
 
 
 def annotations_by_page_number(
@@ -1589,6 +1804,27 @@ def annotations_by_page_number(
             return annotation.bbox
 
     return annotations[0].bbox
+
+
+def annotation_anchor_by_page_number(
+    annotations: list[Annotation],
+    page_number: int,
+    text_ref: str,
+) -> TextAnchor | None:
+    normalized_text_ref = normalize_annotation_text_ref(text_ref)
+    for annotation in annotations:
+        if (
+            annotation.page_number == page_number
+            and normalize_annotation_text_ref(annotation.text_ref) == normalized_text_ref
+            and annotation.anchor is not None
+        ):
+            return annotation.anchor
+
+    for annotation in annotations:
+        if annotation.page_number == page_number and annotation.anchor is not None:
+            return annotation.anchor
+
+    return None
 
 
 def annotations_grouped_by_page(annotations: list[Annotation]) -> dict[int, list[Annotation]]:
@@ -1624,8 +1860,7 @@ def text_ref_word_count(text_ref: str) -> int:
     return len(re.findall(r"\S+", text_ref))
 
 
-def locally_validate_annotations(annotations: list[Annotation], chunks: list[dict]) -> list[Annotation]:
-    page_sources = build_page_sources(chunks)
+def locally_validate_annotations(annotations: list[Annotation], page_sources: dict[int, str]) -> list[Annotation]:
     candidates: list[Annotation] = []
     drop_reasons: Counter[str] = Counter()
 
@@ -1686,6 +1921,113 @@ def locally_validate_annotations(annotations: list[Annotation], chunks: list[dic
     ]
     logger.info("Local validation survivors by type/importance: %s", summarize_annotations(validated))
     return validated
+
+
+def refine_annotation_bboxes(annotations: list[Annotation], pdf_doc: fitz.Document) -> list[Annotation]:
+    refined_count = 0
+
+    for annotation in annotations:
+        refined_bbox = resolve_precise_annotation_bbox(annotation, pdf_doc)
+        if refined_bbox is None:
+            continue
+
+        annotation.bbox = refined_bbox
+        refined_count += 1
+
+    logger.info("Refined %s/%s annotation bounding boxes using PDF text search", refined_count, len(annotations))
+    return annotations
+
+
+def resolve_precise_annotation_bbox(annotation: Annotation, pdf_doc: fitz.Document) -> BoundingBox | None:
+    if annotation.page_number < 1 or annotation.page_number > pdf_doc.page_count:
+        return None
+
+    query = normalize_annotation_text_ref(annotation.text_ref)
+    if not query:
+        return None
+
+    page = pdf_doc.load_page(annotation.page_number - 1)
+    matches = search_page_for_text_ref(page, query)
+    if not matches:
+        return None
+
+    best_match: fitz.Rect
+    if annotation.anchor is not None and annotation.anchor.occurrence_index < len(matches):
+        best_match = matches[annotation.anchor.occurrence_index]
+    else:
+        context_rect = denormalize_bbox(annotation.bbox, page.rect)
+        best_match = min(matches, key=lambda rect: search_match_rank(rect, context_rect))
+    fragment = normalize_rect(best_match, page.rect)
+    return BoundingBox(
+        x=fragment.x,
+        y=fragment.y,
+        width=fragment.width,
+        height=fragment.height,
+        fragments=[fragment],
+    )
+
+
+def search_page_for_text_ref(page: fitz.Page, text_ref: str) -> list[fitz.Rect]:
+    queries = [text_ref]
+    stripped = text_ref.strip("()[]{}\"'.,;: ")
+    if stripped and stripped != text_ref:
+        queries.append(stripped)
+
+    for query in queries:
+        try:
+            matches = page.search_for(query)
+        except Exception:
+            logger.warning("PyMuPDF search_for failed for page %s query %.80r", page.number + 1, query, exc_info=True)
+            return []
+
+        if matches:
+            return matches
+
+    return []
+
+
+def denormalize_bbox(bbox: BoundingBox, page_rect: fitz.Rect) -> fitz.Rect:
+    return fitz.Rect(
+        page_rect.x0 + (bbox.x * page_rect.width),
+        page_rect.y0 + (bbox.y * page_rect.height),
+        page_rect.x0 + ((bbox.x + bbox.width) * page_rect.width),
+        page_rect.y0 + ((bbox.y + bbox.height) * page_rect.height),
+    )
+
+
+def normalize_rect(rect: fitz.Rect, page_rect: fitz.Rect) -> HighlightFragment:
+    return HighlightFragment(
+        x=(rect.x0 - page_rect.x0) / page_rect.width,
+        y=(rect.y0 - page_rect.y0) / page_rect.height,
+        width=(rect.x1 - rect.x0) / page_rect.width,
+        height=(rect.y1 - rect.y0) / page_rect.height,
+    )
+
+
+def search_match_rank(match_rect: fitz.Rect, context_rect: fitz.Rect) -> tuple[int, float, float, float, float]:
+    return (
+        0 if rects_intersect(match_rect, context_rect) else 1,
+        rect_center_distance(match_rect, context_rect),
+        rect_area(match_rect),
+        match_rect.y0,
+        match_rect.x0,
+    )
+
+
+def rects_intersect(left: fitz.Rect, right: fitz.Rect) -> bool:
+    return left.x0 <= right.x1 and right.x0 <= left.x1 and left.y0 <= right.y1 and right.y0 <= left.y1
+
+
+def rect_center_distance(left: fitz.Rect, right: fitz.Rect) -> float:
+    left_center_x = (left.x0 + left.x1) / 2
+    left_center_y = (left.y0 + left.y1) / 2
+    right_center_x = (right.x0 + right.x1) / 2
+    right_center_y = (right.y0 + right.y1) / 2
+    return ((left_center_x - right_center_x) ** 2 + (left_center_y - right_center_y) ** 2) ** 0.5
+
+
+def rect_area(rect: fitz.Rect) -> float:
+    return max(rect.x1 - rect.x0, 0) * max(rect.y1 - rect.y0, 0)
 
 
 def shorten_text_ref(annotation: Annotation, page_text: str) -> str | None:
