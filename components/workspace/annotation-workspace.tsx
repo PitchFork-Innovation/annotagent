@@ -10,8 +10,8 @@ const PdfWorkspace = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex min-h-screen items-center justify-center bg-[#efe7d7] text-night/55">
-        Loading paper workspace...
+      <div className="flex min-h-screen items-center justify-center bg-void font-mono text-[13px] text-smoke">
+        <span className="cursor-blink">Loading workspace</span>
       </div>
     )
   }
@@ -21,7 +21,7 @@ export function AnnotationWorkspace({ workspace }: { workspace: PaperWorkspace }
   const [isChatOpen, setIsChatOpen] = useState(false);
 
   return (
-    <main className="min-h-screen bg-[#efe7d7] text-night">
+    <main className="min-h-screen bg-void text-linen">
       <div className="flex min-h-screen">
         <div className="min-w-0 flex-1">
           <PdfWorkspace workspace={workspace} onToggleChat={() => setIsChatOpen((value) => !value)} />

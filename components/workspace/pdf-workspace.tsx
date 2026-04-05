@@ -145,77 +145,103 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
 
   return (
     <div className="px-4 py-5 md:px-8">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <button
-            className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm transition hover:bg-white"
-            onClick={() => router.push("/")}
-            type="button"
-          >
-            Back to library
-          </button>
-          <p className="text-xs uppercase tracking-[0.28em] text-night/40">{workspace.paper.arxivId}</p>
-          <h1 className="mt-2 max-w-4xl font-serif text-3xl leading-tight md:text-4xl">{workspace.paper.title}</h1>
-          <section className="mt-5 max-w-3xl rounded-[1.6rem] border border-black/10 bg-white/78 p-5 shadow-sm backdrop-blur">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Top controls row */}
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          {/* Back + ArXiv ID */}
+          <div className="mb-3 flex items-center gap-3">
+            <button
+              className="rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen"
+              onClick={() => router.push("/")}
+              type="button"
+            >
+              ← Library
+            </button>
+            <span className="font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">
+              {workspace.paper.arxivId}
+            </span>
+          </div>
+
+          {/* Paper title */}
+          <h1 className="max-w-4xl font-display text-3xl font-light leading-tight text-ghost md:text-[2.6rem]">
+            {workspace.paper.title}
+          </h1>
+
+          {/* AI summary card */}
+          <section className="mt-5 max-w-3xl rounded-xl border border-rim bg-cave p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-night/45">AI key points</p>
-                <p className="mt-1 text-xs text-night/45">Short summary generated from the paper abstract and extracted text.</p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">AI Key Points</p>
+                <p className="mt-0.5 font-mono text-[11px] text-fog">
+                  Summary from abstract and extracted text.
+                </p>
               </div>
-              <span className="rounded-full border border-black/10 bg-[#f5ecdd] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-night/50">
+              <span className="rounded border border-gold/25 bg-gold/[0.07] px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-gold/70">
                 LaTeX ready
               </span>
             </div>
-            <RichText content={summaryContent} className="mt-4 text-[15px] leading-7 text-night/72" />
+            <RichText content={summaryContent} className="font-mono text-[13px] leading-[1.8] text-smoke" />
           </section>
         </div>
+
+        {/* Chat toggle */}
         <button
-          className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm"
+          className="shrink-0 rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen"
           onClick={onToggleChat}
           type="button"
         >
-          Toggle inquiry panel
+          Inquiry ›
         </button>
       </div>
+
+      {/* Reprocess controls */}
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <button
-          className="rounded-full border border-black/10 bg-white/85 px-4 py-2 text-sm font-medium text-night shadow-sm transition hover:bg-white"
+          className="rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen disabled:cursor-not-allowed disabled:opacity-50"
           disabled={isReprocessing}
           onClick={onReprocess}
           type="button"
         >
-          {isReprocessing ? "Reprocessing annotations..." : "Reprocess annotations"}
+          {isReprocessing ? "Reprocessing..." : "Reprocess annotations"}
         </button>
-        {reprocessMessage ? <p className="text-sm text-night/65">{reprocessMessage}</p> : null}
+        {reprocessMessage ? (
+          <p className="font-mono text-[11px] text-fog">{reprocessMessage}</p>
+        ) : null}
       </div>
+
       {isReprocessing ? (
-        <div className="mb-5 space-y-3 rounded-[1.5rem] border border-black/10 bg-white/70 p-4 shadow-sm">
-          <div className="overflow-hidden rounded-full bg-black/10">
+        <div className="mb-5 space-y-2 rounded-xl border border-rim bg-cave p-4">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[11px] text-smoke">
+              {reprocessProgress?.stage ?? "Re-running annotation pipeline"}
+            </span>
+            {reprocessProgress?.currentChunk && reprocessProgress?.totalChunks && (
+              <span className="font-mono text-[11px] text-gold/70">
+                {reprocessProgress.currentChunk}/{reprocessProgress.totalChunks}
+              </span>
+            )}
+          </div>
+          <div className="h-px w-full bg-rim">
             <div
-              className="h-2 rounded-full bg-ink transition-[width] duration-700"
+              className="h-px bg-gold transition-[width] duration-700"
               style={{ width: `${reprocessProgressValue}%` }}
             />
           </div>
-          <p className="text-sm text-night/60">
+          <p className="font-mono text-[11px] text-fog">
             {reprocessProgress?.message ?? "Re-running PDF extraction and annotation generation for this paper."}
           </p>
-          {reprocessProgress?.currentChunk && reprocessProgress?.totalChunks ? (
-            <p className="text-xs uppercase tracking-[0.18em] text-night/45">
-              Chunk {reprocessProgress.currentChunk} of {reprocessProgress.totalChunks}
-            </p>
-          ) : null}
         </div>
       ) : null}
 
-      <div ref={viewerRef} className="mx-auto flex w-full max-w-[1180px] flex-col gap-6">
+      <div ref={viewerRef} className="mx-auto flex w-full max-w-[1180px] flex-col gap-5">
         {pdfError ? (
-          <div className="rounded-[1.5rem] border border-red-200 bg-red-50 p-6 text-red-900 shadow-sm">
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-red-700">PDF unavailable</p>
-            <p className="mt-3 text-sm leading-6">
+          <div className="rounded-xl border border-ember/30 bg-ember/[0.07] p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-ember">PDF unavailable</p>
+            <p className="mt-2 font-mono text-[12px] leading-6 text-fog">
               {pdfError}
             </p>
             <a
-              className="mt-4 inline-flex rounded-2xl bg-red-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-800"
+              className="mt-4 inline-flex rounded border border-ember/40 bg-ember/10 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-ember transition hover:bg-ember/20"
               href={pdfFileUrl}
               rel="noreferrer"
               target="_blank"
@@ -240,10 +266,12 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
             const pageAnnotations = annotationsByPage[pageNumber] ?? [];
 
             return (
-              <section key={pageNumber} className="relative overflow-visible rounded-[1.5rem] bg-white shadow-float">
-                <div className="flex items-center justify-between px-3 pb-2 pt-3">
-                  <span className="text-xs uppercase tracking-[0.25em] text-night/40">Page {pageNumber}</span>
-                  <span className="text-xs text-night/50">{pageAnnotations.length} annotations</span>
+              <section key={pageNumber} className="relative overflow-visible rounded-xl bg-white shadow-float">
+                <div className="flex items-center justify-between border-b border-black/8 px-3 pb-2 pt-2.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.32em] text-black/35">
+                    Page {pageNumber}
+                  </span>
+                  <span className="font-mono text-[10px] text-black/40">{pageAnnotations.length} annotations</span>
                 </div>
                 <div
                   ref={(node) => {
@@ -374,7 +402,7 @@ function AnnotationOverlay({
 
 function PaperCard({ label }: { label: string }) {
   return (
-    <div className="flex min-h-[320px] items-center justify-center rounded-[1.5rem] bg-white text-night/50">
+    <div className="flex min-h-[320px] items-center justify-center rounded-xl border border-rim bg-cave font-mono text-[12px] text-smoke">
       {label}
     </div>
   );
@@ -577,7 +605,7 @@ function AnnotationPopup({
         />
       </div>
       <aside
-        className="pointer-events-auto absolute z-20 w-[320px] max-w-[calc(100vw-64px)] rounded-[1.7rem] border border-black/10 bg-white/96 p-4 shadow-float backdrop-blur"
+        className="pointer-events-auto absolute z-20 max-w-[calc(100vw-64px)] rounded-xl border border-rim bg-cave/[0.97] p-4 shadow-float backdrop-blur"
         style={{
           top: `${top}px`,
           left: `${cardLeft}px`,
@@ -589,15 +617,24 @@ function AnnotationPopup({
           transition: "opacity 180ms ease 140ms, transform 260ms cubic-bezier(0.22, 1, 0.36, 1) 140ms"
         }}
       >
-        <div className="flex items-center justify-between gap-3">
-          <span className="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: tone, backgroundColor: `${tone}16` }}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <span
+            className="rounded border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.24em]"
+            style={{ color: tone, backgroundColor: `${tone}12`, borderColor: `${tone}40` }}
+          >
             {popup.annotation.type === "highlight" ? "Key Result" : popup.annotation.type}
           </span>
-          <span className="text-xs text-night/45">Importance {popup.annotation.importance}</span>
+          <span className="font-mono text-[10px] text-smoke">
+            importance {popup.annotation.importance}
+          </span>
         </div>
-        <RichText content={popup.annotation.note} className="mt-4 text-sm leading-6 text-night" />
-        <button className="mt-4 text-sm font-medium text-night/65" onClick={onClose} type="button">
-          Dismiss
+        <RichText content={popup.annotation.note} className="font-mono text-[12px] leading-[1.75] text-linen" />
+        <button
+          className="mt-4 font-mono text-[11px] text-fog transition hover:text-linen"
+          onClick={onClose}
+          type="button"
+        >
+          Dismiss ×
         </button>
       </aside>
     </div>
