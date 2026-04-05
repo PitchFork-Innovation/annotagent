@@ -151,7 +151,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
           {/* Back + ArXiv ID */}
           <div className="mb-3 flex items-center gap-3">
             <button
-              className="rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen"
+              className="rounded border border-gold/25 bg-gradient-to-b from-shell to-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-linen shadow-[0_12px_30px_rgba(0,0,0,0.28)] ring-1 ring-gold/10 transition hover:border-gold/45 hover:from-shell hover:to-shell hover:text-ghost"
               onClick={() => router.push("/")}
               type="button"
             >
@@ -168,25 +168,22 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
           </h1>
 
           {/* AI summary card */}
-          <section className="mt-5 max-w-3xl rounded-xl border border-rim bg-cave p-5">
+          <section className="mt-5 max-w-3xl rounded-xl border border-rim/90 bg-gradient-to-br from-cave via-cave to-shell/70 p-5 shadow-[0_20px_48px_rgba(0,0,0,0.24)] ring-1 ring-white/5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">AI Key Points</p>
+                <p className="font-mono text-[10px] uppercase tracking-[0.4em] text-gold/80">AI Key Points</p>
                 <p className="mt-0.5 font-mono text-[11px] text-fog">
                   Summary from abstract and extracted text.
                 </p>
               </div>
-              <span className="rounded border border-gold/25 bg-gold/[0.07] px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.22em] text-gold/70">
-                LaTeX ready
-              </span>
             </div>
-            <RichText content={summaryContent} className="font-mono text-[13px] leading-[1.8] text-smoke" />
+            <RichText content={summaryContent} className="font-mono text-[13px] leading-[1.8] text-linen/90" />
           </section>
         </div>
 
         {/* Chat toggle */}
         <button
-          className="shrink-0 rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen"
+          className="shrink-0 rounded border border-gold/25 bg-gradient-to-b from-shell to-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-linen shadow-[0_12px_30px_rgba(0,0,0,0.28)] ring-1 ring-gold/10 transition hover:border-gold/45 hover:from-shell hover:to-shell hover:text-ghost"
           onClick={onToggleChat}
           type="button"
         >
@@ -197,7 +194,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
       {/* Reprocess controls */}
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <button
-          className="rounded border border-rim bg-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded border border-gold/25 bg-gradient-to-b from-shell to-cave px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-linen shadow-[0_12px_30px_rgba(0,0,0,0.28)] ring-1 ring-gold/10 transition hover:border-gold/45 hover:from-shell hover:to-shell hover:text-ghost disabled:cursor-not-allowed disabled:opacity-50"
           disabled={isReprocessing}
           onClick={onReprocess}
           type="button"
@@ -519,14 +516,14 @@ function AnnotationPopup({
       frameId = window.requestAnimationFrame(updatePosition);
     };
 
-    window.addEventListener("scroll", requestUpdate, { passive: true });
+    document.addEventListener("scroll", requestUpdate, { passive: true, capture: true });
     window.addEventListener("resize", requestUpdate);
 
     return () => {
       if (frameId !== 0) {
         window.cancelAnimationFrame(frameId);
       }
-      window.removeEventListener("scroll", requestUpdate);
+      document.removeEventListener("scroll", requestUpdate, true);
       window.removeEventListener("resize", requestUpdate);
     };
   }, []);
@@ -548,6 +545,24 @@ function AnnotationPopup({
   const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
   const anchorLeft = pageRect.left + popup.anchorX * pageRect.width;
   const anchorTop = pageRect.top + popup.anchorY * pageRect.height;
+  const anchorIsVisible =
+    pageRect.width > 0 &&
+    pageRect.height > 0 &&
+    anchorLeft >= 0 &&
+    anchorLeft <= viewportWidth &&
+    anchorTop >= 0 &&
+    anchorTop <= viewportHeight;
+
+  useEffect(() => {
+    if (!anchorIsVisible) {
+      onClose();
+    }
+  }, [anchorIsVisible, onClose]);
+
+  if (!anchorIsVisible) {
+    return null;
+  }
+
   const side = anchorLeft > (pageRect.left + pageRect.right) / 2 ? "left" : "right";
   const cardWidth = Math.min(320, viewportWidth - 32);
   const edgeGap = 20;

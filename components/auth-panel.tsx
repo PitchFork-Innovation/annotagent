@@ -110,7 +110,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
             <span className="text-gold/50">›</span> Annotations persisted to Supabase
           </li>
           <li className="flex gap-2">
-            <span className="text-gold/50">›</span> Chat history preserved per session
+            <span className="text-gold/50">›</span> Paper library scoped to your account
           </li>
         </ul>
         <form action="/auth/signout" method="post">
@@ -206,7 +206,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
           <span className="text-gold/50">›</span> Annotations persisted to Supabase
         </li>
         <li className="flex gap-2">
-          <span className="text-gold/50">›</span> Chat history preserved per session
+          <span className="text-gold/50">›</span> Paper library scoped to your account
         </li>
       </ul>
     </div>

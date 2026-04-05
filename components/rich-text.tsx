@@ -10,7 +10,7 @@ type Props = {
 
 export function RichText({ content, className }: Props) {
   return (
-    <div className={cn("rich-text space-y-3 text-sm leading-7 text-night/75", className)}>
+    <div className={cn("rich-text space-y-3 text-sm leading-7 text-inherit", className)}>
       <ReactMarkdown
         rehypePlugins={[rehypeKatex]}
         remarkPlugins={[remarkMath]}
@@ -24,11 +24,11 @@ export function RichText({ content, className }: Props) {
           ),
           li: ({ className: nodeClassName, ...props }) => <li className={cn("pl-1", nodeClassName)} {...props} />,
           strong: ({ className: nodeClassName, ...props }) => (
-            <strong className={cn("font-semibold text-night", nodeClassName)} {...props} />
+            <strong className={cn("font-semibold text-current", nodeClassName)} {...props} />
           ),
           code: ({ className: nodeClassName, ...props }) => (
             <code
-              className={cn("rounded bg-black/5 px-1 py-0.5 text-[0.95em] text-night", nodeClassName)}
+              className={cn("rounded bg-black/10 px-1 py-0.5 text-[0.95em] text-current", nodeClassName)}
               {...props}
             />
           )

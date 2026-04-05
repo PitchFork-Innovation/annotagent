@@ -25,6 +25,7 @@
 - `AnnotationWorkspace` is the top-level client shell for the paper screen and toggles the chat panel.
 - `PdfWorkspace` owns PDF rendering, overlay rendering, summary display, reprocess polling, and annotation popup behavior.
 - `ChatPanel` owns the collapsible inquiry panel and streams responses from `/api/chat`.
+- Assistant responses in the inquiry panel render markdown and LaTeX via the shared rich-text renderer, while preserving the paper-scoped streaming chat flow.
 
 ## Client And Server Boundaries
 - Keep data loading in server pages or route handlers unless there is a clear browser-only need.
@@ -36,6 +37,7 @@
 - Overlapping annotations should remain geometrically aligned to the underlying text. Prefer stack ordering over visual y-offsets so narrower contained highlights stay visible without shifting off the text they annotate.
 - Annotation interaction is currently a single-popup model. Escape and outside click both close the active popup.
 - The inquiry panel is collapsible, stateful, and scoped to a single paper.
+- After a user submits a question, the inquiry panel should show an in-panel pending state until the assistant has visible response text.
 - Workspace rendering assumes one `PaperWorkspace` object with `paper`, `annotations`, and `chatHistory`.
 - The current visual language is editorial rather than dashboard-like: warm paper background, serif display headings, rounded surfaces, and restrained accent colors from annotation type.
 

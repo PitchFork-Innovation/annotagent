@@ -21,9 +21,9 @@ export function AnnotationWorkspace({ workspace }: { workspace: PaperWorkspace }
   const [isChatOpen, setIsChatOpen] = useState(false);
 
   return (
-    <main className="min-h-screen bg-void text-linen">
-      <div className="flex min-h-screen">
-        <div className="min-w-0 flex-1">
+    <main className="h-screen overflow-hidden bg-void text-linen">
+      <div className="flex h-full min-h-0">
+        <div className="min-w-0 flex-1 overflow-y-auto">
           <PdfWorkspace workspace={workspace} onToggleChat={() => setIsChatOpen((value) => !value)} />
         </div>
         <ChatPanel

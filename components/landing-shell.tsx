@@ -141,7 +141,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                   )}
                 >
                   <span className="select-none px-4 font-mono text-[13px] text-gold/60">
-                    arxiv:
+                    arXiv ID:
                   </span>
                   <input
                     className="flex-1 bg-transparent py-4 pr-2 font-mono text-[13px] text-linen outline-none placeholder:text-fog"
