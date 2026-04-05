@@ -18,7 +18,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(
-    hasAuthError ? "Authentication could not be completed. Try signing in again below." : null
+    hasAuthError ? "Authentication failed. Try signing in again." : null
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -65,7 +65,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
       return;
     }
 
-    setNotice(`Account created for ${email}. Check your inbox if email confirmation is enabled in Supabase.`);
+    setNotice(`Account created for ${email}. Check your inbox if email confirmation is enabled.`);
   }
 
   async function onResetPassword() {
@@ -85,26 +85,37 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
       return;
     }
 
-    setNotice(`Password reset email sent to ${email}. Use the link in that email to set a password.`);
+    setNotice(`Reset link sent to ${email}.`);
   }
 
   if (user) {
     return (
-      <div className="mt-4 space-y-4">
+      <div className="space-y-5">
         <div>
-          <h2 className="text-2xl font-semibold">{user.email}</h2>
-          <p className="mt-2 text-sm leading-6 text-white/70">
-            Your private library is active. New papers and annotations will be scoped to this Supabase account.
+          <p className="font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">
+            Authenticated as
+          </p>
+          <h2 className="mt-2 font-display text-[1.6rem] font-light leading-tight text-linen">
+            {user.email}
+          </h2>
+          <p className="mt-2 font-mono text-[11px] leading-[1.7] text-fog">
+            Your private library is active. Papers and annotations are scoped to this account.
           </p>
         </div>
-        <ul className="space-y-3 text-sm text-white/80">
-          <li>PDF cached by arXiv ID in Supabase Storage</li>
-          <li>Annotations persisted with page and normalized bounding boxes</li>
-          <li>24-hour inquiry history kept in KV-compatible session storage</li>
+        <ul className="space-y-1.5 font-mono text-[11px] text-fog">
+          <li className="flex gap-2">
+            <span className="text-gold/50">›</span> PDF cached by arXiv ID
+          </li>
+          <li className="flex gap-2">
+            <span className="text-gold/50">›</span> Annotations persisted to Supabase
+          </li>
+          <li className="flex gap-2">
+            <span className="text-gold/50">›</span> Chat history preserved per session
+          </li>
         </ul>
         <form action="/auth/signout" method="post">
           <button
-            className="inline-flex h-11 items-center rounded-2xl border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+            className="rounded border border-rim bg-shell px-4 py-2 font-mono text-[11px] uppercase tracking-[0.24em] text-smoke transition hover:border-gold/40 hover:text-linen"
             type="submit"
           >
             Sign out
@@ -115,68 +126,88 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
   }
 
   return (
-    <div className="mt-4 space-y-4">
+    <div className="space-y-4">
       <div>
-        <h2 className="text-2xl font-semibold">Sign in required</h2>
-        <p className="mt-2 text-sm leading-6 text-white/70">
-          We require private per-user paper libraries via Supabase Auth. Sign in with your email and password
-          to unlock ingestion and your saved library.
+        <h2 className="font-display text-[1.6rem] font-light leading-tight text-linen">
+          Sign in required
+        </h2>
+        <p className="mt-2 font-mono text-[11px] leading-[1.7] text-fog">
+          Private paper libraries are tied to your account. Sign in to enable ingestion.
         </p>
       </div>
-      <form className="space-y-3" onSubmit={onSignIn}>
+
+      <form className="space-y-2" onSubmit={onSignIn}>
         <input
-          className="h-12 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/30"
+          className="h-10 w-full rounded border border-rim bg-shell/50 px-3 font-mono text-[12px] text-linen outline-none transition placeholder:text-fog focus:border-gold/50 focus:bg-shell"
           type="email"
           placeholder="you@lab.edu"
           value={email}
-          onChange={(event) => setEmail(event.target.value)}
+          onChange={(e) => setEmail(e.target.value)}
           required
         />
         <input
-          className="h-12 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/30"
+          className="h-10 w-full rounded border border-rim bg-shell/50 px-3 font-mono text-[12px] text-linen outline-none transition placeholder:text-fog focus:border-gold/50 focus:bg-shell"
           type="password"
-          placeholder="Password"
+          placeholder="password"
           value={password}
-          onChange={(event) => setPassword(event.target.value)}
+          onChange={(e) => setPassword(e.target.value)}
           minLength={6}
           required
         />
+        <div className="flex gap-2 pt-1">
+          <button
+            className={cn(
+              "h-10 flex-1 rounded bg-gold font-mono text-[11px] uppercase tracking-[0.24em] text-void transition hover:bg-gold/90",
+              isSubmitting && "cursor-progress opacity-60"
+            )}
+            disabled={isSubmitting}
+            type="submit"
+          >
+            {isSubmitting ? "..." : "Sign in"}
+          </button>
+          <button
+            className={cn(
+              "h-10 flex-1 rounded border border-rim bg-shell font-mono text-[11px] uppercase tracking-[0.24em] text-linen transition hover:border-gold/40",
+              isSubmitting && "cursor-progress opacity-60"
+            )}
+            disabled={isSubmitting}
+            onClick={onSignUp}
+            type="button"
+          >
+            {isSubmitting ? "..." : "Create"}
+          </button>
+        </div>
         <button
-          className={cn(
-            "inline-flex h-12 w-full items-center justify-center rounded-2xl bg-coral px-4 text-sm font-semibold text-night transition hover:bg-coral/90",
-            isSubmitting && "cursor-progress opacity-70"
-          )}
-          disabled={isSubmitting}
-          type="submit"
-        >
-          {isSubmitting ? "Signing in..." : "Sign in"}
-        </button>
-        <button
-          className={cn(
-            "inline-flex h-12 w-full items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15",
-            isSubmitting && "cursor-progress opacity-70"
-          )}
-          disabled={isSubmitting}
-          onClick={onSignUp}
-          type="button"
-        >
-          {isSubmitting ? "Creating account..." : "Create account"}
-        </button>
-        <button
-          className="text-sm text-white/75 underline underline-offset-4 transition hover:text-white"
+          className="font-mono text-[11px] text-fog underline underline-offset-4 transition hover:text-linen"
           disabled={isSubmitting}
           onClick={onResetPassword}
           type="button"
         >
-          Forgot password?
+          Forgot password
         </button>
       </form>
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {notice ? <p className="text-sm text-emerald-200">{notice}</p> : null}
-      <ul className="space-y-3 text-sm text-white/80">
-        <li>PDF cached by arXiv ID in Supabase Storage</li>
-        <li>Annotations persisted with page and normalized bounding boxes</li>
-        <li>24-hour inquiry history kept in KV-compatible session storage</li>
+
+      {error && (
+        <p className="rounded border border-ember/30 bg-ember/[0.07] px-3 py-2 font-mono text-[11px] text-ember">
+          {error}
+        </p>
+      )}
+      {notice && (
+        <p className="rounded border border-sea/30 bg-sea/[0.07] px-3 py-2 font-mono text-[11px] text-sea">
+          {notice}
+        </p>
+      )}
+
+      <ul className="space-y-1.5 font-mono text-[11px] text-fog">
+        <li className="flex gap-2">
+          <span className="text-gold/50">›</span> PDF cached by arXiv ID
+        </li>
+        <li className="flex gap-2">
+          <span className="text-gold/50">›</span> Annotations persisted to Supabase
+        </li>
+        <li className="flex gap-2">
+          <span className="text-gold/50">›</span> Chat history preserved per session
+        </li>
       </ul>
     </div>
   );

@@ -34,7 +34,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
     setProgress(null);
 
     if (!user) {
-      setError("Sign in with your email first. Paper ingestion is only available for authenticated users.");
+      setError("Sign in first — paper ingestion requires an authenticated session.");
       return;
     }
 
@@ -48,7 +48,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
         const json = await response.json();
         setProgress(json);
       } catch {
-        // Keep the current progress UI as-is if polling fails temporarily.
+        // ignore transient polling failures
       }
     }, 1000);
 
@@ -86,116 +86,213 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
         : 8;
 
   return (
-    <main className="paper-grid min-h-screen px-6 py-8 text-night md:px-10">
-      <div className="mx-auto flex max-w-7xl flex-col gap-10">
-        <section className="overflow-hidden rounded-[2rem] border border-black/10 bg-white/70 shadow-float backdrop-blur">
-          <div className="grid gap-8 p-8 md:grid-cols-[1.2fr_0.8fr] md:p-12">
-            <div className="space-y-6">
-              <p className="inline-flex rounded-full border border-ink/15 bg-ink/5 px-4 py-2 text-xs font-medium uppercase tracking-[0.3em] text-ink">
-                Annotagent
+    <main className="dot-grid min-h-screen bg-void text-linen">
+      {/* Top navigation bar */}
+      <header className="reveal border-b border-rim/70 px-6 py-4 md:px-10">
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[11px] font-medium uppercase tracking-[0.44em] text-gold">
+              Annotagent
+            </span>
+            <span className="h-1 w-1 rounded-full bg-rim" />
+            <span className="font-mono text-[11px] text-smoke">AI research annotation</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-[7px] w-[7px] animate-pulse rounded-full bg-sea" />
+            <span className="font-mono text-[11px] text-smoke">online</span>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-7xl px-6 py-12 md:px-10">
+        {/* Hero + auth panel */}
+        <section className="grid gap-8 md:grid-cols-[1.15fr_0.85fr] md:gap-14">
+
+          {/* Left: hero */}
+          <div className="flex flex-col gap-8">
+            {/* Overline */}
+            <div className="reveal reveal-1 flex items-center gap-3">
+              <span className="h-px w-8 bg-gold/50" />
+              <span className="font-mono text-[10px] uppercase tracking-[0.48em] text-gold/80">
+                Research Intelligence
+              </span>
+            </div>
+
+            {/* Headline */}
+            <div className="reveal reveal-2">
+              <h1 className="font-display text-[3.6rem] font-light leading-[1.04] tracking-tight text-ghost md:text-[5.5rem]">
+                Annotate<br />
+                <em className="italic text-gold">the Archive.</em>
+              </h1>
+              <p className="mt-6 max-w-lg font-mono text-[13px] leading-7 text-smoke">
+                Paste an arXiv ID. Fetch the PDF. Generate inline underlines, margin notes,
+                and definitions with OpenAI — then interrogate the paper through an agentic
+                inquiry panel.
               </p>
-              <div className="space-y-4">
-                <h1 className="max-w-3xl font-serif text-4xl leading-tight text-night md:text-6xl">
-                  Read academic papers with inline underlines, margin notes, and a paper-aware chat copilot.
-                </h1>
-                <p className="max-w-2xl text-lg leading-8 text-night/70">
-                  Paste an arXiv ID, fetch the PDF, generate structured annotations with OpenAI, and explore the paper through an agentic inquiry panel.
-                </p>
-              </div>
-              <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onSubmit}>
-                <input
-                  className="h-14 flex-1 rounded-2xl border border-black/10 bg-paper px-5 text-base outline-none ring-0 transition focus:border-ink/40"
-                  placeholder="Enter arXiv ID, e.g. 2301.07041"
-                  value={arxivId}
-                  onChange={(event) => setArxivId(event.target.value)}
-                />
-                <button
+            </div>
+
+            {/* Input form */}
+            <div className="reveal reveal-3 space-y-3">
+              <form onSubmit={onSubmit}>
+                <div
                   className={cn(
-                    "h-14 rounded-2xl bg-ink px-6 text-sm font-semibold text-white transition hover:bg-ink/90",
-                    (isPending || isSubmitting || !user) && "cursor-progress opacity-70"
+                    "glow-gold flex items-center rounded-lg border border-rim bg-cave transition-all",
+                    (isSubmitting || isPending) && "opacity-60"
                   )}
-                  disabled={isPending || isSubmitting || !user}
-                  type="submit"
                 >
-                  {!user
-                    ? "Sign in to annotate"
-                    : isSubmitting
-                      ? "Generating annotations..."
-                      : isPending
-                        ? "Opening paper..."
-                        : "Annotate paper"}
-                </button>
+                  <span className="select-none px-4 font-mono text-[13px] text-gold/60">
+                    arxiv:
+                  </span>
+                  <input
+                    className="flex-1 bg-transparent py-4 pr-2 font-mono text-[13px] text-linen outline-none placeholder:text-fog"
+                    placeholder="2301.07041"
+                    value={arxivId}
+                    onChange={(e) => setArxivId(e.target.value)}
+                    disabled={isSubmitting || isPending}
+                  />
+                  <button
+                    className={cn(
+                      "m-1.5 rounded px-5 py-2.5 font-mono text-[11px] uppercase tracking-[0.24em] transition",
+                      !user || isSubmitting || isPending
+                        ? "cursor-not-allowed bg-shell text-smoke"
+                        : "bg-gold text-void hover:bg-gold/90 active:scale-95"
+                    )}
+                    disabled={isPending || isSubmitting || !user}
+                    type="submit"
+                  >
+                    {!user
+                      ? "Sign in"
+                      : isSubmitting
+                        ? "Processing..."
+                        : isPending
+                          ? "Opening..."
+                          : "Run →"}
+                  </button>
+                </div>
               </form>
-              {isSubmitting ? (
-                <div className="space-y-3">
-                  <div className="overflow-hidden rounded-full bg-black/10">
+
+              {/* Progress indicator */}
+              {isSubmitting && (
+                <div className="space-y-2 rounded-lg border border-rim bg-cave p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[11px] text-smoke">
+                      {progress?.stage ?? "Initializing pipeline"}
+                    </span>
+                    {progress?.currentChunk && progress?.totalChunks && (
+                      <span className="font-mono text-[11px] text-gold/70">
+                        {progress.currentChunk}/{progress.totalChunks} chunks
+                      </span>
+                    )}
+                  </div>
+                  <div className="h-px w-full bg-rim">
                     <div
-                      className="h-2 rounded-full bg-ink transition-[width] duration-700"
+                      className="h-px bg-gold transition-[width] duration-700"
                       style={{ width: `${progressValue}%` }}
                     />
                   </div>
-                  <p className="text-sm text-night/60">
-                    {progress?.message ??
-                      "Fetching the PDF, extracting text, and asking OpenAI for annotations. This can take a few minutes for a fresh paper."}
+                  <p className="font-mono text-[11px] text-fog">
+                    {progress?.message ?? "Fetching PDF, extracting text, generating annotations with OpenAI..."}
                   </p>
-                  {progress?.currentChunk && progress?.totalChunks ? (
-                    <p className="text-xs uppercase tracking-[0.18em] text-night/45">
-                      Chunk {progress.currentChunk} of {progress.totalChunks}
-                    </p>
-                  ) : null}
                 </div>
-              ) : null}
-              {error ? <p className="text-sm text-red-700">{error}</p> : null}
-              <div className="flex flex-wrap gap-3 text-sm text-night/60">
-                <span className="rounded-full bg-coral/10 px-3 py-1.5 text-coral">Key results</span>
-                <span className="rounded-full bg-amber/15 px-3 py-1.5 text-amber">Definitions</span>
-                <span className="rounded-full bg-ink/10 px-3 py-1.5 text-ink">Explanatory notes</span>
-              </div>
+              )}
+
+              {error && (
+                <p className="rounded-lg border border-ember/30 bg-ember/[0.07] px-4 py-3 font-mono text-[11px] text-ember">
+                  {error}
+                </p>
+              )}
             </div>
-            <div className="rounded-[1.5rem] border border-black/10 bg-night p-6 text-white">
-              <p className="text-sm uppercase tracking-[0.28em] text-white/45">Session</p>
+
+            {/* Annotation type legend */}
+            <div className="reveal reveal-4 flex flex-wrap gap-2">
+              <span className="rounded border border-ember/30 bg-ember/[0.07] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.24em] text-ember">
+                ◆ key results
+              </span>
+              <span className="rounded border border-gold/30 bg-gold/[0.07] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.24em] text-gold">
+                ◆ definitions
+              </span>
+              <span className="rounded border border-steel/30 bg-steel/[0.07] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.24em] text-steel">
+                ◆ notes
+              </span>
+            </div>
+          </div>
+
+          {/* Right: auth */}
+          <div className="reveal reveal-3">
+            <div className="rounded-xl border border-rim bg-cave p-6">
+              <div className="mb-5 flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.42em] text-smoke">
+                  Session
+                </span>
+                <span className="ml-auto inline-block h-1.5 w-1.5 rounded-full bg-sea" />
+              </div>
               <AuthPanel hasAuthError={hasAuthError} user={user} />
             </div>
           </div>
         </section>
 
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-serif text-3xl text-night">Your annotated library</h2>
-            <span className="text-sm text-night/55">{papers.length} papers</span>
+        {/* Library */}
+        <section className="mt-24">
+          {/* Section header */}
+          <div className="reveal mb-8 flex items-center gap-5">
+            <span className="h-px flex-1 bg-rim" />
+            <h2 className="font-display text-2xl font-light text-linen/60 md:text-3xl">
+              Library
+            </h2>
+            <span className="font-mono text-[11px] text-smoke">{papers.length} papers</span>
+            <span className="h-px flex-1 bg-rim" />
           </div>
+
           {papers.length > 0 ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {papers.map((paper) => (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {papers.map((paper, i) => (
                 <button
                   key={paper.id}
-                  className="rounded-[1.5rem] border border-black/10 bg-white/80 p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-float"
+                  className="group reveal rounded-xl border border-rim bg-cave p-5 text-left transition-all duration-300 hover:border-gold/40 hover:bg-shell hover:shadow-glow-sm"
+                  style={{ animationDelay: `${0.06 * i}s` }}
                   onClick={() => router.push(`/paper/${paper.id}`)}
                   type="button"
                 >
-                  <p className="text-xs uppercase tracking-[0.24em] text-night/45">{paper.arxivId}</p>
-                  <h3 className="mt-3 text-xl font-semibold text-night">{paper.title}</h3>
-                  <p className="mt-3 line-clamp-3 text-sm leading-6 text-night/65">{paper.abstract}</p>
-                  <div className="mt-6 flex items-center justify-between text-sm">
-                    <span className="text-night/50">{paper.annotationCount} annotations</span>
-                    <span className="text-ink">Open workspace</span>
+                  <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">
+                    {paper.arxivId}
+                  </p>
+                  <h3 className="font-display text-lg font-medium leading-snug text-linen transition-colors group-hover:text-ghost">
+                    {paper.title}
+                  </h3>
+                  <p className="mt-2 line-clamp-3 font-mono text-[11px] leading-[1.65] text-fog">
+                    {paper.abstract}
+                  </p>
+                  <div className="mt-5 flex items-center justify-between">
+                    <span className="font-mono text-[10px] text-smoke">
+                      {paper.annotationCount} annotations
+                    </span>
+                    <span className="font-mono text-[10px] text-gold/0 transition-all duration-200 group-hover:text-gold/80">
+                      open →
+                    </span>
                   </div>
                 </button>
               ))}
             </div>
           ) : (
-            <div className="rounded-[1.5rem] border border-black/10 bg-white/70 p-8 text-center shadow-sm">
-              <p className="text-lg font-semibold text-night">
-                {user ? "No papers yet." : "Sign in to start your private paper library."}
+            <div className="rounded-xl border border-dashed border-rim p-12 text-center">
+              <p className="font-display text-2xl font-light text-linen/35">
+                {user ? "No papers ingested yet." : "Sign in to access your library."}
               </p>
-              <p className="mt-2 text-sm leading-6 text-night/60">
+              <p className="mt-3 font-mono text-[11px] text-fog">
                 {user
-                  ? "Paste an arXiv ID above to ingest your first paper and open the annotation workspace."
-                  : "Once you sign in above, every ingested paper will be saved to your own account."}
+                  ? "Enter an arXiv ID above to annotate your first paper."
+                  : "Your private paper library is tied to your account."}
               </p>
             </div>
           )}
         </section>
+
+        {/* Footer */}
+        <footer className="mt-20 flex items-center justify-center border-t border-rim/50 pt-8">
+          <span className="font-mono text-[10px] uppercase tracking-[0.5em] text-fog/50">
+            Annotagent · AI Paper Annotation
+          </span>
+        </footer>
       </div>
     </main>
   );

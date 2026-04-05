@@ -3,21 +3,20 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 html,
 body {
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(220, 109, 87, 0.14), transparent 26%),
-    radial-gradient(circle at top right, rgba(24, 49, 79, 0.12), transparent 28%),
-    linear-gradient(180deg, #f7f3ea 0%, #efe7d7 100%);
-  color: #13191f;
+  background: #08090a;
+  color: #d4cfc5;
 }
 
 body {
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-mono, "JetBrains Mono", Consolas, monospace);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -29,13 +28,56 @@ a {
   text-decoration: none;
 }
 
-.paper-grid {
-  background-image:
-    linear-gradient(rgba(19, 25, 31, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(19, 25, 31, 0.03) 1px, transparent 1px);
-  background-size: 20px 20px;
+/* Fine dot grid for dark backgrounds */
+.dot-grid {
+  background-image: radial-gradient(rgba(212, 207, 197, 0.055) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
+/* Gold focus glow for inputs */
+.glow-gold {
+  transition: box-shadow 200ms ease, border-color 200ms ease;
+}
+.glow-gold:focus-within {
+  box-shadow: 0 0 0 1px rgba(232, 160, 48, 0.5), 0 0 32px rgba(232, 160, 48, 0.1);
+  border-color: rgba(232, 160, 48, 0.45) !important;
+}
+
+/* Staggered reveal animations */
+.reveal {
+  opacity: 0;
+  animation: fadeUp 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.reveal-1 { animation-delay: 0.04s; }
+.reveal-2 { animation-delay: 0.13s; }
+.reveal-3 { animation-delay: 0.24s; }
+.reveal-4 { animation-delay: 0.37s; }
+.reveal-5 { animation-delay: 0.52s; }
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Blinking cursor for terminal prompt */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.cursor-blink::after {
+  content: "▊";
+  animation: blink 1.1s step-start infinite;
+  color: rgba(232, 160, 48, 0.6);
+  margin-left: 1px;
+}
+
+/* PDF text layer override */
 .react-pdf__Page__textContent {
   pointer-events: none;
 }
