@@ -536,18 +536,16 @@ function AnnotationPopup({
   }, []);
 
   const pageRoot = pageRootRef.current;
-  if (!pageRoot) {
-    return null;
-  }
-
-  const pageRect = pageRoot.getBoundingClientRect();
+  const pageRect = pageRoot?.getBoundingClientRect();
   const viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth;
   const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
-  const anchorLeft = pageRect.left + popup.anchorX * pageRect.width;
-  const anchorTop = pageRect.top + popup.anchorY * pageRect.height;
+  const hasPageRect = Boolean(pageRect);
+  const anchorLeft = pageRect ? pageRect.left + popup.anchorX * pageRect.width : 0;
+  const anchorTop = pageRect ? pageRect.top + popup.anchorY * pageRect.height : 0;
   const anchorIsVisible =
-    pageRect.width > 0 &&
-    pageRect.height > 0 &&
+    hasPageRect &&
+    (pageRect?.width ?? 0) > 0 &&
+    (pageRect?.height ?? 0) > 0 &&
     anchorLeft >= 0 &&
     anchorLeft <= viewportWidth &&
     anchorTop >= 0 &&
@@ -559,7 +557,7 @@ function AnnotationPopup({
     }
   }, [anchorIsVisible, onClose]);
 
-  if (!anchorIsVisible) {
+  if (!pageRect || !anchorIsVisible) {
     return null;
   }
 

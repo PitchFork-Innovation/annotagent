@@ -50,7 +50,7 @@ export function ChatPanel({
 
   useEffect(() => {
     seenMessageIdsRef.current = new Set(messages.map((message) => message.id));
-  }, [initialMessages]);
+  }, [messages]);
 
   useEffect(() => {
     const newMessageIds = messages

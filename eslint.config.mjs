@@ -12,8 +12,10 @@ const compat = new FlatCompat({
 const config = [
   {
     ignores: [
+      ".claude/**",
       ".next/**",
       "next-env.d.ts",
+      "**/next-env.d.ts",
       "node_modules/**"
     ]
   },
