@@ -1,58 +1,111 @@
-# ArXiv Annotation Agent
+# Annotagent
 
-[Live deployment](https://annotagent.vercel.app/)
+**AI-powered annotation engine for arXiv research papers.**
 
-## What is implemented
+Annotagent automatically reads, analyzes, and annotates academic papers — generating precise inline highlights, contextual notes, and jargon definitions anchored directly to PDF coordinates. A built-in chat interface lets you interrogate any paper with full-text context, turning passive reading into active inquiry.
 
-- Next.js App Router frontend with:
-  - arXiv ID entry workflow
-  - private library landing page
-  - per-paper workspace
-  - `react-pdf` viewer
-  - overlayed hand-drawn SVG underlines for `highlight`, `note`, and `definition`
-  - single-popover annotation interaction model
-  - collapsible NotebookLM-style inquiry panel with streamed responses
-- Python ingestion microservice with:
-  - arXiv resolution by ID
-  - PDF fetch
-  - PyMuPDF text block and bbox extraction
-  - paragraph-scale chunking
-  - OpenAI-based annotation pass with Pydantic validation
-- Supabase-oriented persistence:
-  - paper records
-  - annotation records
-  - user paper library
-  - storage caching for PDFs by arXiv ID
-- KV-style session chat persistence with 24-hour TTL support
+**[Live demo](https://annotagent.vercel.app/)**
 
-## Project structure
+---
 
-- [`app`](https://github.com/kokonut121/annotagent/blob/main/app): Next.js routes and API endpoints
-- [`components`](https://github.com/kokonut121/annotagent/blob/main/components): viewer, workspace, and landing UI
-- [`lib`](https://github.com/kokonut121/annotagent/blob/main/lib): environment config, Supabase/KV helpers, server data layer
-- [`python_service`](https://github.com/kokonut121/annotagent/blob/main/python_service): FastAPI ingestion pipeline
-- [`supabase/schema.sql`](https://github.com/kokonut121/annotagent/blob/main/supabase/schema.sql): database schema and RLS starter policies
+## How It Works
 
-## Environment
+1. **Enter an arXiv ID** — Annotagent resolves the paper, downloads the PDF, and extracts structured text blocks with bounding-box geometry via PyMuPDF.
+2. **Chunked annotation pipeline** — The full text is split into overlapping paragraph-scale chunks and processed through a multi-stage LLM pipeline: generation with few-shot prompting, structural repair, cross-page validation, and bbox refinement against the original PDF layout.
+3. **Anchored overlays** — Annotations are rendered as hand-drawn SVG underlines positioned with sub-page precision using text anchors resolved against extracted page content, not fragile absolute coordinates.
+4. **Paper-aware chat** — Ask questions with the full paper text injected as context. Responses are streamed in real time with LaTeX math rendering and chat history persistence.
 
-Copy [`.env.example`](https://github.com/kokonut121/annotagent/blob/main/.env.example) to `.env.local` and set:
+## Architecture
 
-- Supabase URL, anon key, and service role key
-- OpenAI API key
-- Python service URL
-- KV REST endpoint/token if you want session chat persistence
+```
+┌─────────────────────────────────────────────────────┐
+│  Next.js 15 App Router (Vercel)                     │
+│  ┌──────────────┐  ┌────────────┐  ┌─────────────┐ │
+│  │ PDF Workspace │  │ Chat Panel │  │ Auth / Lib  │ │
+│  │ react-pdf +   │  │ Streaming  │  │ Supabase    │ │
+│  │ SVG overlays  │  │ AI SDK     │  │ SSR client  │ │
+│  └──────┬───────┘  └─────┬──────┘  └──────┬──────┘ │
+│         │                │                 │        │
+│  ┌──────┴────────────────┴─────────────────┴──────┐ │
+│  │          Server Data Layer (lib/)              │ │
+│  │  Orchestration · PDF caching · Auth guards     │ │
+│  └──────────────────────┬─────────────────────────┘ │
+└─────────────────────────┼───────────────────────────┘
+                          │
+              ┌───────────┴───────────┐
+              │  FastAPI Python Service │
+              │  arXiv fetch · PyMuPDF  │
+              │  LLM annotation pipeline│
+              │  Pydantic validation    │
+              └───────────┬────────────┘
+                          │
+              ┌───────────┴───────────┐
+              │  Supabase (Postgres)  │
+              │  Papers · Annotations │
+              │  User libraries · RLS │
+              │  PDF storage bucket   │
+              └───────────────────────┘
+```
 
-## Local setup
+## Key Features
 
-Frontend:
+- **Multi-stage annotation pipeline** — Few-shot generation, LLM-based repair of malformed outputs, cross-page validation with page-source grounding, and PDF-native bbox refinement using text search against the rendered document.
+- **Rolling memory system** — The annotation pipeline maintains a compact memory of paper state, defined terms, covered topics, and recent annotations across chunks to ensure coherence and avoid redundancy over long papers.
+- **Text anchor resolution** — Annotations are anchored to exact character offsets within page text, enabling precise positioning even when the same term appears multiple times on a page.
+- **Deterministic paper briefs** — Before annotation begins, the pipeline samples early, middle, and late chunks to build a structural brief that guides annotation quality across the full document.
+- **Per-user paper libraries** — Authenticated users maintain private libraries with row-level security enforced at the database layer.
+- **Streamed chat with math rendering** — Paper Q&A uses the Vercel AI SDK with OpenAI streaming, rendered with React Markdown, remark-math, and KaTeX.
+- **PDF caching** — Papers are cached to Supabase Storage on first ingest, with signed-URL fallback for reprocessing, eliminating repeated arXiv downloads.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Zustand |
+| PDF Rendering | react-pdf with custom SVG annotation overlays |
+| Chat | Vercel AI SDK, OpenAI streaming, KaTeX math rendering |
+| Ingestion Service | FastAPI, PyMuPDF, LangChain text splitters, OpenAI |
+| Database | Supabase (PostgreSQL with RLS), Supabase Storage |
+| Auth | Supabase Auth (email/password, OAuth) |
+| Deployment | Vercel (frontend), configurable Python service host |
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20.x
+- Python 3.10+
+- A Supabase project
+- An OpenAI API key
+
+### Environment Setup
+
+Copy `.env.example` to `.env.local` and configure:
 
 ```bash
-nvm use
+cp .env.example .env.local
+```
+
+Required variables:
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only) |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `PYTHON_SERVICE_URL` | URL of the FastAPI ingestion service |
+| `KV_REST_API_URL` | *(Optional)* Vercel KV endpoint for chat persistence |
+| `KV_REST_API_TOKEN` | *(Optional)* Vercel KV token |
+
+### Frontend
+
+```bash
 npm install
 npm run dev
 ```
 
-Python service:
+### Python Ingestion Service
 
 ```bash
 python3 -m venv .venv
@@ -60,18 +113,42 @@ python3 -m venv .venv
 .venv/bin/python python_service/main.py
 ```
 
-Supabase:
+### Database
 
-1. Run [`supabase/schema.sql`](https://github.com/kokonut121/annotagent/blob/main/supabase/schema.sql).
-2. Create a storage bucket named `papers`.
-3. Enable Supabase Auth providers required by the PRD.
+1. Run `supabase/schema.sql` against your Supabase project to create tables, indexes, and RLS policies.
+2. Create a storage bucket named `papers` in Supabase Storage.
+3. Enable your preferred Supabase Auth providers.
 
-## Verification notes
+## Project Structure
 
-- `python3 -m py_compile python_service/main.py` passes.
-- Python service imports validate successfully.
-- Frontend verification should be run on Node `20.x` to match the committed runtime contract used for local development and Vercel deployments.
+```
+app/                  Next.js routes and API endpoints
+  api/
+    chat/             Paper Q&A streaming endpoint
+    ingest/           Paper ingestion trigger + progress polling
+    papers/[paperId]/ Workspace data, PDF proxy, reprocessing
+  auth/               OAuth callback and sign-out
+  paper/[paperId]/    Paper workspace page
 
-## Important implementation note
+components/           React components
+  workspace/          PDF viewer, annotation overlays, chat panel
+  auth-panel.tsx      Authentication UI
+  landing-shell.tsx   Home page with library and search
 
-The app now uses OpenAI model identifiers directly. By default it is configured for `gpt-4o-mini`, which keeps annotation and paper Q&A costs low while preserving the existing architecture.
+lib/                  Shared utilities
+  server-data.ts      Core orchestration layer
+  env.ts              Zod-validated environment config
+  types.ts            TypeScript type definitions
+  kv.ts               KV cache wrapper for chat history
+  supabase/           Server, admin, and browser Supabase clients
+
+python_service/       FastAPI ingestion pipeline
+  main.py             arXiv resolution, PDF extraction, LLM annotation
+
+supabase/
+  schema.sql          Database schema with RLS policies
+```
+
+## License
+
+MIT

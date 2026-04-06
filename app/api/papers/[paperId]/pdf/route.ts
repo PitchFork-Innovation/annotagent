@@ -103,7 +103,7 @@ async function fetchPdfFromCandidates(candidates: string[]) {
         cache: "no-store",
         headers: {
           Accept: "application/pdf",
-          "User-Agent": "AnnotAgent/0.1 (+https://localhost)"
+          "User-Agent": "AnnotAgent/1.0 (+https://annotagent.vercel.app)"
         }
       });
 

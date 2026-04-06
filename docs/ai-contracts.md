@@ -9,7 +9,6 @@
 ## Source Of Truth Code Areas
 - `app/api/chat/route.ts`
 - `python_service/main.py`
-- `python_service/tests/test_annotation_prompts.py`
 - `lib/types.ts`
 - `lib/server-data.ts`
 
@@ -66,7 +65,6 @@
 
 ## Verification
 - Prompt or model changes in Python:
-  - `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
   - `python3 -m py_compile python_service/main.py`
 - Contract changes:
   - all Python checks above

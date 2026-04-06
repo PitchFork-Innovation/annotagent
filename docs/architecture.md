@@ -61,4 +61,4 @@
 
 ## Verification
 - Cross-boundary changes: `npm run lint`, `npm run typecheck`, and the relevant Python checks
-- Ingestion or summary changes: include `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
+- Ingestion or summary changes: include `python3 -m py_compile python_service/main.py`

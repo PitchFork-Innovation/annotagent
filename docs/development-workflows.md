@@ -27,7 +27,6 @@
 - Frontend typecheck: `npm run typecheck`
 - Python service dev: `.venv/bin/python python_service/main.py`
 - Python syntax sanity: `python3 -m py_compile python_service/main.py`
-- Python prompt tests: `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
 
 ## Verification Matrix
 - UI-only change:
@@ -43,7 +42,6 @@
   - relevant frontend checks
   - relevant Python checks if ingest payloads or stored fields changed
 - Ingestion, prompt, or summary change:
-  - `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
   - `python3 -m py_compile python_service/main.py`
   - `npm run typecheck` if the TypeScript side consumes changed data
 

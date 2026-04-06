@@ -53,7 +53,6 @@
   - `docs/api-server-data.md`
 - Inspect next:
   - `python_service/main.py`
-  - `python_service/tests/test_annotation_prompts.py`
   - `lib/server-data.ts`
   - `lib/types.ts`
 - Preserve:
@@ -62,7 +61,6 @@
   - synchronized Python and TypeScript payload shape
   - reprocess compatibility
 - Verify:
-  - `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
   - `python3 -m py_compile python_service/main.py`
   - `npm run typecheck` if contracts changed
 

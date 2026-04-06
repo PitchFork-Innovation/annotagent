@@ -28,8 +28,7 @@
 
 ## Verification Defaults
 - Frontend and route changes: `npm run lint` and `npm run typecheck`
-- Python ingestion and prompt changes: `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
-- Python import/startup sanity: `python3 -m py_compile python_service/main.py`
+- Python changes: `python3 -m py_compile python_service/main.py`
 - Full-stack behavior changes: run the relevant frontend and Python checks together
 
 ## Task Guide

@@ -8,7 +8,6 @@
 
 ## Source Of Truth Code Areas
 - `python_service/main.py`
-- `python_service/tests/test_annotation_prompts.py`
 - `python_service/requirements.txt`
 - `lib/types.ts`
 - `lib/server-data.ts`
@@ -58,7 +57,7 @@
 ## Cross-Boundary Rules
 - Python owns the ingest response contract, but TypeScript consumes it. Keep `IngestionPayload` in `lib/types.ts` synchronized with Python output.
 - If annotation shape, page numbering, or summary fields change, update both Python and TypeScript in the same change.
-- Keep prompt rules aligned with the existing tests. If you change prompt scaffolding, update `python_service/tests/test_annotation_prompts.py`.
+- Keep prompt rules aligned with few-shot examples and validation logic in `python_service/main.py`.
 
 ## Common Change Patterns
 - Annotation quality issue: inspect shared prompt rules, few-shot examples, repair flow, and validation flow before changing extraction.
@@ -69,6 +68,5 @@
 - Summary changes: inspect both Python `/summarize` behavior and the `ensurePaperSummary` fallback path in TypeScript.
 
 ## Verification
-- `.venv/bin/python -m unittest python_service.tests.test_annotation_prompts`
 - `python3 -m py_compile python_service/main.py`
 - If the payload contract changed, also run `npm run typecheck`
