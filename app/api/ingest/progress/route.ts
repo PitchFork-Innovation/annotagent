@@ -1,11 +1,6 @@
-import { promises as fs } from "fs";
-import os from "os";
-import path from "path";
 import { NextRequest, NextResponse } from "next/server";
-
-function getProgressFilePath(jobId: string) {
-  return path.join(os.tmpdir(), "annotagent-progress", `${jobId}.json`);
-}
+import { createPythonServiceToken } from "@/lib/python-auth";
+import { env } from "@/lib/env";
 
 export async function GET(request: NextRequest) {
   const jobId = request.nextUrl.searchParams.get("jobId");
@@ -15,8 +10,29 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const content = await fs.readFile(getProgressFilePath(jobId), "utf8");
-    return NextResponse.json(JSON.parse(content));
+    const url = new URL("/progress", env.PYTHON_SERVICE_URL);
+    url.searchParams.set("jobId", jobId);
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${createPythonServiceToken(jobId, "ingest")}`
+      }
+    });
+    const text = await response.text();
+
+    if (!response.ok) {
+      return NextResponse.json({
+        status: "pending",
+        stage: "queued",
+        message: "Waiting for annotation pipeline to report progress."
+      });
+    }
+
+    return new NextResponse(text, {
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
   } catch {
     return NextResponse.json({
       status: "pending",

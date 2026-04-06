@@ -1,7 +1,9 @@
 import http from "http";
 import https from "https";
+import { randomUUID } from "crypto";
 import { env } from "./env";
 import { getChatHistory, setChatHistory } from "./kv";
+import { createPythonServiceToken } from "./python-auth";
 import { createSupabaseAdminClient } from "./supabase/admin";
 import { createSupabaseServerClient } from "./supabase/server";
 import type { AnnotationRecord, ChatMessage, IngestionPayload, PaperListItem, PaperWorkspace, TextAnchor, TextAnchorPayload, UserProfile } from "./types";
@@ -280,9 +282,10 @@ function normalizeRecentPaper(paper: RecentUserPaperRow["paper"]): RecentPaperRo
 }
 
 async function fetchIngestionPayload(arxivId: string, jobId?: string): Promise<IngestionPayload> {
+  const resolvedJobId = jobId ?? randomUUID();
   const url = new URL("/ingest", env.PYTHON_SERVICE_URL);
-  const payload = JSON.stringify({ arxiv_id: arxivId, job_id: jobId });
-  return fetchPythonPayload(url, payload);
+  const payload = JSON.stringify({ arxiv_id: arxivId, job_id: resolvedJobId });
+  return fetchPythonPayload(url, payload, createPythonServiceToken(resolvedJobId, "ingest"));
 }
 
 async function fetchReprocessPayload(
@@ -294,22 +297,23 @@ async function fetchReprocessPayload(
   },
   jobId?: string
 ): Promise<IngestionPayload> {
+  const resolvedJobId = jobId ?? randomUUID();
   const url = new URL("/reprocess", env.PYTHON_SERVICE_URL);
   const payload = JSON.stringify({
     arxiv_id: paper.arxivId,
     title: paper.title,
     abstract: paper.abstract,
     pdf_url: paper.pdfUrl,
-    job_id: jobId
+    job_id: resolvedJobId
   });
-  return fetchPythonPayload(url, payload);
+  return fetchPythonPayload(url, payload, createPythonServiceToken(resolvedJobId, "reprocess"));
 }
 
-async function fetchPythonPayload(url: URL, payload: string): Promise<IngestionPayload> {
+async function fetchPythonPayload(url: URL, payload: string, token: string): Promise<IngestionPayload> {
   let response: { status: number; body: string };
 
   try {
-    response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS);
+    response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS, token);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Python ingestion service request failed.";
     throw new Error(message);
@@ -327,7 +331,7 @@ async function fetchPythonPayload(url: URL, payload: string): Promise<IngestionP
   return JSON.parse(response.body) as IngestionPayload;
 }
 
-function postJson(url: URL, body: string, timeoutMs: number): Promise<{ status: number; body: string }> {
+function postJson(url: URL, body: string, timeoutMs: number, token?: string): Promise<{ status: number; body: string }> {
   const client = url.protocol === "https:" ? https : http;
 
   return new Promise((resolve, reject) => {
@@ -340,7 +344,8 @@ function postJson(url: URL, body: string, timeoutMs: number): Promise<{ status: 
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body)
+          "Content-Length": Buffer.byteLength(body),
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
         }
       },
       (response) => {
