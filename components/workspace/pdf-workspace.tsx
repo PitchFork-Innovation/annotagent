@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Document, Page, pdfjs } from "react-pdf";
 import { RichText } from "@/components/rich-text";
 import { readJsonResponse } from "@/lib/http";
+import { authorizePythonReprocess, fetchPythonProgress, runPythonReprocess } from "@/lib/python-service";
 import type { AnnotationRecord, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
@@ -100,25 +101,31 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
     setReprocessMessage(null);
     setReprocessProgress(null);
     const jobId = crypto.randomUUID();
-    const progressInterval = window.setInterval(async () => {
-      try {
-        const response = await fetch(`/api/ingest/progress?jobId=${jobId}`, {
-          cache: "no-store"
-        });
-        const json = await response.json();
-        setReprocessProgress(json);
-      } catch {
-        // Leave the current progress state in place during transient polling failures.
-      }
-    }, 1000);
+    let progressInterval: number | undefined;
 
     try {
-      const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess`, {
+      const authorization = await authorizePythonReprocess(workspace.paper.id, jobId);
+      if (!authorization.pythonServiceUrl || !authorization.token) {
+        setReprocessMessage(authorization.error ?? "Unable to contact the reprocess service.");
+        return;
+      }
+
+      progressInterval = window.setInterval(async () => {
+        try {
+          const json = await fetchPythonProgress(authorization.pythonServiceUrl, authorization.token, jobId);
+          setReprocessProgress(json);
+        } catch {
+          // Leave the current progress state in place during transient polling failures.
+        }
+      }, 1000);
+
+      const payload = await runPythonReprocess(authorization.pythonServiceUrl, authorization.token, workspace.paper, jobId);
+      const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess/apply`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ jobId })
+        body: JSON.stringify(payload)
       });
       const json = await readJsonResponse<{ error?: string; annotationCount?: number }>(response);
 
@@ -137,7 +144,9 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
     } catch (error) {
       setReprocessMessage(error instanceof Error ? error.message : "Unable to reprocess annotations.");
     } finally {
-      window.clearInterval(progressInterval);
+      if (progressInterval) {
+        window.clearInterval(progressInterval);
+      }
       setIsReprocessing(false);
     }
   }

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
 import { AuthPanel } from "@/components/auth-panel";
 import { readJsonResponse } from "@/lib/http";
+import { authorizePythonIngest, fetchPythonProgress, runPythonIngest } from "@/lib/python-service";
 import type { PaperListItem, UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -41,25 +42,31 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
 
     setIsSubmitting(true);
     const jobId = crypto.randomUUID();
-    const progressInterval = window.setInterval(async () => {
-      try {
-        const response = await fetch(`/api/ingest/progress?jobId=${jobId}`, {
-          cache: "no-store"
-        });
-        const json = await response.json();
-        setProgress(json);
-      } catch {
-        // ignore transient polling failures
-      }
-    }, 1000);
+    let progressInterval: number | undefined;
 
     try {
-      const response = await fetch("/api/ingest", {
+      const authorization = await authorizePythonIngest(jobId);
+      if (!authorization.pythonServiceUrl || !authorization.token) {
+        setError(authorization.error ?? "Unable to contact the annotation service.");
+        return;
+      }
+
+      progressInterval = window.setInterval(async () => {
+        try {
+          const json = await fetchPythonProgress(authorization.pythonServiceUrl, authorization.token, jobId);
+          setProgress(json);
+        } catch {
+          // ignore transient polling failures
+        }
+      }, 1000);
+
+      const payload = await runPythonIngest(authorization.pythonServiceUrl, authorization.token, arxivId, jobId);
+      const response = await fetch("/api/ingest/apply", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ arxivId, jobId })
+        body: JSON.stringify(payload)
       });
       const json = await readJsonResponse<{ error?: string; paper?: { id: string } }>(response);
 
@@ -81,7 +88,9 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to annotate that paper.");
     } finally {
-      window.clearInterval(progressInterval);
+      if (progressInterval) {
+        window.clearInterval(progressInterval);
+      }
       setIsSubmitting(false);
     }
   }

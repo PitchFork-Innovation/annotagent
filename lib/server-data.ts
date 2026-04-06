@@ -141,9 +141,15 @@ export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace
 }
 
 export async function ensurePaperIngested(arxivId: string, userId: string, jobId?: string) {
+  const normalizedArxivId = arxivId.trim();
+  const payload = await fetchIngestionPayload(normalizedArxivId, jobId);
+  return applyIngestedPaper(payload, userId);
+}
+
+export async function applyIngestedPaper(payload: IngestionPayload, userId: string) {
   const supabase = await createSupabaseServerClient();
   const admin = createSupabaseAdminClient();
-  const normalizedArxivId = arxivId.trim();
+  const normalizedArxivId = payload.arxivId.trim();
   const { data: existing } = await admin
     .from("papers")
     .select("id, arxiv_id")
@@ -155,13 +161,11 @@ export async function ensurePaperIngested(arxivId: string, userId: string, jobId
     return existing;
   }
 
-  const payload = await fetchIngestionPayload(normalizedArxivId, jobId);
   const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
-
   const { data: createdPaper, error: paperError } = await insertPaperRow(admin, payload, cachedPdfUrl);
 
   if (paperError?.code === "23505") {
-    const { data: duplicatePaper } = await admin.from("papers").select("id").eq("arxiv_id", payload.arxivId).single();
+    const { data: duplicatePaper } = await admin.from("papers").select("id, arxiv_id").eq("arxiv_id", payload.arxivId).single();
 
     if (duplicatePaper) {
       await supabase.from("user_papers").upsert({ user_id: userId, paper_id: duplicatePaper.id });
@@ -173,27 +177,8 @@ export async function ensurePaperIngested(arxivId: string, userId: string, jobId
     throw new Error(paperError?.message ?? "Paper insert failed.");
   }
 
-  if (payload.annotations.length > 0) {
-    const { error: annotationError } = await admin.from("annotations").insert(
-      payload.annotations.map((annotation) => ({
-        paper_id: createdPaper.id,
-        page_number: annotation.page_number,
-        type: annotation.type,
-        text_ref: annotation.text_ref,
-        note: annotation.note,
-        importance: annotation.importance,
-        bbox: annotation.bbox,
-        anchor: annotation.anchor ?? null
-      }))
-    );
-
-    if (annotationError) {
-      throw new Error(annotationError.message);
-    }
-  }
-
+  await insertAnnotations(admin, createdPaper.id, payload);
   await supabase.from("user_papers").upsert({ user_id: userId, paper_id: createdPaper.id });
-
   return createdPaper;
 }
 
@@ -202,28 +187,16 @@ export async function upsertChatHistory(paperId: string, messages: ChatMessage[]
 }
 
 export async function reprocessPaperAnnotations(paperId: string, userId: string, jobId?: string) {
-  const supabase = await createSupabaseServerClient();
   const admin = createSupabaseAdminClient();
-
-  const { data: linkedPaper } = await supabase
-    .from("user_papers")
-    .select("paper:papers(id, arxiv_id, title, abstract, pdf_url)")
-    .eq("user_id", userId)
-    .eq("paper_id", paperId)
-    .maybeSingle();
-
-  const paper = (linkedPaper as LinkedPaperRow | null)?.paper;
+  const paper = await getLinkedPaperForUser(paperId, userId);
 
   if (!paper?.id || !paper?.arxiv_id || !paper.title || !paper.pdf_url) {
     throw new Error("Paper not found in your library.");
   }
 
   const resolvedPdfUrl = await resolvePreferredPaperPdfUrl(admin, paper.arxiv_id, paper.pdf_url);
-
-  await upgradePaperFromPipeline(
-    admin,
+  const payload = await fetchReprocessPayload(
     {
-      id: paper.id,
       arxivId: paper.arxiv_id,
       title: paper.title,
       abstract: paper.abstract,
@@ -231,6 +204,35 @@ export async function reprocessPaperAnnotations(paperId: string, userId: string,
     },
     jobId
   );
+  return applyReprocessedPaper(paper.id, userId, payload);
+}
+
+export async function applyReprocessedPaper(paperId: string, userId: string, payload: IngestionPayload) {
+  const admin = createSupabaseAdminClient();
+  const paper = await getLinkedPaperForUser(paperId, userId);
+
+  if (!paper?.id || !paper?.arxiv_id || !paper.title || !paper.pdf_url) {
+    throw new Error("Paper not found in your library.");
+  }
+
+  if (paper.arxiv_id !== payload.arxivId) {
+    throw new Error("Reprocess payload does not match the selected paper.");
+  }
+
+  const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
+  const { error: paperError } = await updatePaperRow(admin, paper.id, payload, cachedPdfUrl);
+
+  if (paperError) {
+    throw new Error(paperError.message);
+  }
+
+  const { error: deleteError } = await admin.from("annotations").delete().eq("paper_id", paper.id);
+
+  if (deleteError) {
+    throw new Error(deleteError.message);
+  }
+
+  await insertAnnotations(admin, paper.id, payload);
 
   const { count } = await admin
     .from("annotations")
@@ -403,54 +405,6 @@ async function cachePaperPdf(admin: ReturnType<typeof createSupabaseAdminClient>
   return data.publicUrl;
 }
 
-async function upgradePaperFromPipeline(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  paper: {
-    id: string;
-    arxivId: string;
-    title: string;
-    abstract: string;
-    pdfUrl: string;
-  },
-  jobId?: string
-) {
-  const payload = await fetchReprocessPayload(paper, jobId);
-  const cachedPdfUrl = await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl);
-
-  const { error: paperError } = await updatePaperRow(admin, paper.id, payload, cachedPdfUrl);
-
-  if (paperError) {
-    throw new Error(paperError.message);
-  }
-
-  const { error: deleteError } = await admin.from("annotations").delete().eq("paper_id", paper.id);
-
-  if (deleteError) {
-    throw new Error(deleteError.message);
-  }
-
-  if (payload.annotations.length === 0) {
-    throw new Error("Python ingestion completed without annotations.");
-  }
-
-  const { error: insertError } = await admin.from("annotations").insert(
-    payload.annotations.map((annotation) => ({
-      paper_id: paper.id,
-      page_number: annotation.page_number,
-      type: annotation.type,
-      text_ref: annotation.text_ref,
-      note: annotation.note,
-      importance: annotation.importance,
-      bbox: annotation.bbox,
-      anchor: annotation.anchor ?? null
-    }))
-  );
-
-  if (insertError) {
-    throw new Error(insertError.message);
-  }
-}
-
 async function resolvePreferredPaperPdfUrl(
   admin: ReturnType<typeof createSupabaseAdminClient>,
   arxivId: string,
@@ -564,6 +518,18 @@ function getPaperWorkspaceSelect(includeSummary: boolean) {
   return includeSummary ? `${base}, ai_summary` : base;
 }
 
+async function getLinkedPaperForUser(paperId: string, userId: string) {
+  const supabase = await createSupabaseServerClient();
+  const { data: linkedPaper } = await supabase
+    .from("user_papers")
+    .select("paper:papers(id, arxiv_id, title, abstract, pdf_url)")
+    .eq("user_id", userId)
+    .eq("paper_id", paperId)
+    .maybeSingle();
+
+  return (linkedPaper as LinkedPaperRow | null)?.paper;
+}
+
 async function insertPaperRow(
   admin: ReturnType<typeof createSupabaseAdminClient>,
   payload: IngestionPayload,
@@ -631,6 +597,33 @@ async function updatePaperSummary(
 
   aiSummaryColumnAvailable = true;
   return response;
+}
+
+async function insertAnnotations(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  paperId: string,
+  payload: IngestionPayload
+) {
+  if (payload.annotations.length === 0) {
+    throw new Error("Python ingestion completed without annotations.");
+  }
+
+  const { error } = await admin.from("annotations").insert(
+    payload.annotations.map((annotation) => ({
+      paper_id: paperId,
+      page_number: annotation.page_number,
+      type: annotation.type,
+      text_ref: annotation.text_ref,
+      note: annotation.note,
+      importance: annotation.importance,
+      bbox: annotation.bbox,
+      anchor: annotation.anchor ?? null
+    }))
+  );
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 function buildPaperMutationPayload(payload: IngestionPayload, cachedPdfUrl: string, includeSummary: boolean) {

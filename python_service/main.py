@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -15,7 +18,7 @@ import arxiv
 import fitz
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import NotFoundError, OpenAI
@@ -63,6 +66,7 @@ RECENT_ANNOTATIONS_LIMIT = int(os.getenv("ROLLING_MEMORY_RECENT_ANNOTATIONS_LIMI
 BLOCKED_TEXT_REFS_LIMIT = 24
 CHUNK_SIZE = 1400
 CHUNK_OVERLAP = 120
+PYTHON_SERVICE_SHARED_SECRET = os.getenv("PYTHON_SERVICE_SHARED_SECRET", "dev-python-shared-secret")
 
 ANNOTATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
@@ -565,6 +569,14 @@ class SummaryResponse(BaseModel):
     summary: str
 
 
+class ProgressResponse(BaseModel):
+    status: str
+    stage: str
+    message: str
+    currentChunk: int | None = None
+    totalChunks: int | None = None
+
+
 app = FastAPI(title="ArXiv Annotation Agent Python Service")
 app.add_middleware(
     CORSMiddleware,
@@ -579,6 +591,22 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/progress", response_model=ProgressResponse)
+def progress(jobId: str, request: Request) -> ProgressResponse:
+    authorize_python_service_request(request, None, jobId)
+    progress_path = Path(tempfile.gettempdir()) / "annotagent-progress" / f"{jobId}.json"
+
+    if not progress_path.exists():
+        return ProgressResponse(
+            status="pending",
+            stage="queued",
+            message="Waiting for annotation pipeline to report progress.",
+        )
+
+    payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    return ProgressResponse(**payload)
+
+
 @app.post("/summarize", response_model=SummaryResponse)
 def summarize(request: SummaryRequest) -> SummaryResponse:
     summary = summarize_paper(request.title, request.abstract, request.fullText)
@@ -586,7 +614,11 @@ def summarize(request: SummaryRequest) -> SummaryResponse:
 
 
 @app.post("/ingest", response_model=IngestResponse)
-async def ingest(request: IngestRequest) -> IngestResponse:
+async def ingest(request: IngestRequest, http_request: Request) -> IngestResponse:
+    if not request.job_id:
+        raise HTTPException(status_code=400, detail="job_id is required.")
+
+    authorize_python_service_request(http_request, "ingest", request.job_id)
     normalized_arxiv_id = normalize_arxiv_id(request.arxiv_id)
     write_progress(request.job_id, {"status": "running", "stage": "resolving", "message": "Resolving arXiv metadata..."})
     logger.info("Starting ingest for arXiv ID %s", normalized_arxiv_id)
@@ -607,7 +639,11 @@ async def ingest(request: IngestRequest) -> IngestResponse:
 
 
 @app.post("/reprocess", response_model=IngestResponse)
-async def reprocess(request: ReprocessRequest) -> IngestResponse:
+async def reprocess(request: ReprocessRequest, http_request: Request) -> IngestResponse:
+    if not request.job_id:
+        raise HTTPException(status_code=400, detail="job_id is required.")
+
+    authorize_python_service_request(http_request, "reprocess", request.job_id)
     normalized_arxiv_id = normalize_arxiv_id(request.arxiv_id)
     logger.info("Starting annotation reprocess for arXiv ID %s", normalized_arxiv_id)
 
@@ -680,6 +716,50 @@ def resolve_arxiv_paper(arxiv_id: str):
 
 def is_arxiv_rate_limit_error(error: arxiv.HTTPError) -> bool:
     return "HTTP 429" in str(error)
+
+
+def authorize_python_service_request(
+    request: Request, expected_action: Literal["ingest", "reprocess"] | None, job_id: str
+) -> None:
+    authorization = request.headers.get("authorization", "")
+    prefix = "Bearer "
+
+    if not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="Missing Python service authorization token.")
+
+    token = authorization[len(prefix) :]
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+    except ValueError as error:
+        raise HTTPException(status_code=401, detail="Invalid Python service authorization token.") from error
+
+    expected_signature = base64.urlsafe_b64encode(
+        hmac.new(PYTHON_SERVICE_SHARED_SECRET.encode("utf-8"), encoded_payload.encode("utf-8"), hashlib.sha256).digest()
+    ).rstrip(b"=").decode("utf-8")
+
+    if not hmac.compare_digest(encoded_signature, expected_signature):
+        raise HTTPException(status_code=403, detail="Python service authorization token signature mismatch.")
+
+    payload = decode_token_payload(encoded_payload)
+    if payload.get("job_id") != job_id:
+        raise HTTPException(status_code=403, detail="Python service authorization token job mismatch.")
+
+    if expected_action and payload.get("action") != expected_action:
+        raise HTTPException(status_code=403, detail="Python service authorization token action mismatch.")
+
+    expires_at = payload.get("exp")
+    if not isinstance(expires_at, int) or expires_at < int(time.time()):
+        raise HTTPException(status_code=403, detail="Python service authorization token expired.")
+
+
+def decode_token_payload(encoded_payload: str) -> dict:
+    padding = "=" * (-len(encoded_payload) % 4)
+
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(f"{encoded_payload}{padding}")
+        return json.loads(decoded_bytes.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise HTTPException(status_code=401, detail="Invalid Python service authorization token payload.") from error
 
 
 def build_pdf_candidates(source_url: str, arxiv_id: str) -> list[str]:
