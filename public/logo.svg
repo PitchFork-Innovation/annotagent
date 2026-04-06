@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8a030"/>
+      <stop offset="100%" stop-color="#c4841d"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1a1b1e"/>
+      <stop offset="100%" stop-color="#111214"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#08090a"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" stroke="#1f2023" stroke-width="2"/>
+  <!-- Paper/document shape -->
+  <rect x="136" y="88" width="240" height="320" rx="12" fill="url(#page)" stroke="#2a2b2f" stroke-width="2"/>
+  <!-- Folded corner -->
+  <path d="M316 88 L376 148 L316 148 Z" fill="#1f2023" stroke="#2a2b2f" stroke-width="1.5"/>
+  <!-- Text lines on document -->
+  <rect x="168" y="168" width="140" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="192" width="176" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="216" width="120" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="248" width="160" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="272" width="176" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="296" width="96" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="328" width="152" height="6" rx="3" fill="#3a3b40"/>
+  <rect x="168" y="352" width="128" height="6" rx="3" fill="#3a3b40"/>
+  <!-- Gold annotation underlines (hand-drawn style) -->
+  <path d="M166 198 Q220 202 312 196" stroke="url(#gold)" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <path d="M166 278 Q240 282 346 276" stroke="url(#gold)" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <!-- Annotation note bubble -->
+  <g transform="translate(320, 240)">
+    <rect x="0" y="0" width="120" height="64" rx="10" fill="url(#gold)" opacity="0.15" stroke="url(#gold)" stroke-width="2" stroke-opacity="0.5"/>
+    <rect x="16" y="16" width="56" height="4" rx="2" fill="#e8a030" opacity="0.6"/>
+    <rect x="16" y="28" width="72" height="4" rx="2" fill="#e8a030" opacity="0.6"/>
+    <rect x="16" y="40" width="40" height="4" rx="2" fill="#e8a030" opacity="0.6"/>
+  </g>
+  <!-- AI sparkle/agent indicator -->
+  <g transform="translate(396, 108)">
+    <circle cx="0" cy="0" r="28" fill="#08090a" stroke="url(#gold)" stroke-width="2.5"/>
+    <!-- Sparkle star -->
+    <path d="M0 -14 L3 -4 L14 0 L3 4 L0 14 L-3 4 L-14 0 L-3 -4 Z" fill="url(#gold)" opacity="0.9"/>
+  </g>
+</svg>

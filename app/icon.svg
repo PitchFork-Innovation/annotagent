@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="6" fill="#08090a"/>
+  <!-- Mini document -->
+  <rect x="7" y="5" width="14" height="22" rx="2" fill="#1a1b1e" stroke="#2a2b2f" stroke-width="0.75"/>
+  <!-- Text lines -->
+  <rect x="10" y="10" width="8" height="1" rx="0.5" fill="#3a3b40"/>
+  <rect x="10" y="13" width="9" height="1" rx="0.5" fill="#3a3b40"/>
+  <rect x="10" y="16" width="6" height="1" rx="0.5" fill="#3a3b40"/>
+  <rect x="10" y="19" width="9" height="1" rx="0.5" fill="#3a3b40"/>
+  <rect x="10" y="22" width="7" height="1" rx="0.5" fill="#3a3b40"/>
+  <!-- Gold underlines -->
+  <path d="M10 14.5 Q14 15 19 14.3" stroke="#e8a030" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <path d="M10 20.5 Q14 21 19 20.3" stroke="#e8a030" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <!-- AI sparkle -->
+  <circle cx="24" cy="8" r="4.5" fill="#08090a" stroke="#e8a030" stroke-width="0.75"/>
+  <path d="M24 5.5 L24.5 7 L26 7.5 L24.5 8 L24 9.5 L23.5 8 L22 7.5 L23.5 7 Z" fill="#e8a030" opacity="0.9" transform="scale(1.1) translate(-2.4, -0.8)"/>
+</svg>

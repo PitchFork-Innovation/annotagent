@@ -18,33 +18,34 @@ Annotagent automatically reads, analyzes, and annotates academic papers — gene
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Next.js 15 App Router (Vercel)                     │
-│  ┌──────────────┐  ┌────────────┐  ┌─────────────┐ │
-│  │ PDF Workspace │  │ Chat Panel │  │ Auth / Lib  │ │
-│  │ react-pdf +   │  │ Streaming  │  │ Supabase    │ │
-│  │ SVG overlays  │  │ AI SDK     │  │ SSR client  │ │
-│  └──────┬───────┘  └─────┬──────┘  └──────┬──────┘ │
-│         │                │                 │        │
-│  ┌──────┴────────────────┴─────────────────┴──────┐ │
-│  │          Server Data Layer (lib/)              │ │
-│  │  Orchestration · PDF caching · Auth guards     │ │
-│  └──────────────────────┬─────────────────────────┘ │
-└─────────────────────────┼───────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│  Next.js 15 App Router (Vercel)                           │
+│                                                           │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
+│  │ PDF Workspace │  │  Chat Panel  │  │  Auth / Library  ││
+│  │ react-pdf +   │  │  Streaming   │  │  Supabase Auth   ││
+│  │ SVG overlays  │  │  AI SDK      │  │  SSR client      ││
+│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
+│         │                 │                    │          │
+│  ┌──────┴─────────────────┴────────────────────┴────────┐ │
+│  │             Server Data Layer (lib/)                  │ │
+│  │   Orchestration · PDF caching · Auth guards          │ │
+│  └──────────────────────┬───────────────────────────────┘ │
+└─────────────────────────┼─────────────────────────────────┘
                           │
-              ┌───────────┴───────────┐
+              ┌───────────┴────────────┐
               │  FastAPI Python Service │
               │  arXiv fetch · PyMuPDF  │
               │  LLM annotation pipeline│
               │  Pydantic validation    │
               └───────────┬────────────┘
                           │
-              ┌───────────┴───────────┐
-              │  Supabase (Postgres)  │
-              │  Papers · Annotations │
-              │  User libraries · RLS │
-              │  PDF storage bucket   │
-              └───────────────────────┘
+              ┌───────────┴────────────┐
+              │   Supabase (Postgres)  │
+              │  Papers · Annotations  │
+              │  User libraries · RLS  │
+              │  PDF storage bucket    │
+              └────────────────────────┘
 ```
 
 ## Key Features
@@ -61,7 +62,7 @@ Annotagent automatically reads, analyzes, and annotates academic papers — gene
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Zustand |
+| Frontend | Next.js 15, React 19, TypeScript, Tailwind CSS, Zustand, TanStack Query |
 | PDF Rendering | react-pdf with custom SVG annotation overlays |
 | Chat | Vercel AI SDK, OpenAI streaming, KaTeX math rendering |
 | Ingestion Service | FastAPI, PyMuPDF, LangChain text splitters, OpenAI |
@@ -122,31 +123,38 @@ python3 -m venv .venv
 ## Project Structure
 
 ```
-app/                  Next.js routes and API endpoints
+app/                    Next.js routes and API endpoints
   api/
-    chat/             Paper Q&A streaming endpoint
-    ingest/           Paper ingestion trigger + progress polling
-    papers/[paperId]/ Workspace data, PDF proxy, reprocessing
-  auth/               OAuth callback and sign-out
-  paper/[paperId]/    Paper workspace page
+    chat/               Paper Q&A streaming endpoint
+    ingest/             Paper ingestion trigger + progress polling
+    papers/[paperId]/   Workspace data, PDF proxy, reprocessing
+  auth/                 OAuth callback and sign-out
+  paper/[paperId]/      Paper workspace page
+  reset-password/       Password reset flow
 
-components/           React components
-  workspace/          PDF viewer, annotation overlays, chat panel
-  auth-panel.tsx      Authentication UI
-  landing-shell.tsx   Home page with library and search
+components/             React components
+  workspace/            PDF viewer, annotation overlays, chat panel
+  auth-panel.tsx        Authentication UI
+  landing-shell.tsx     Home page with library and search
+  providers.tsx         React Query + context providers
+  rich-text.tsx         Markdown/math rendering
 
-lib/                  Shared utilities
-  server-data.ts      Core orchestration layer
-  env.ts              Zod-validated environment config
-  types.ts            TypeScript type definitions
-  kv.ts               KV cache wrapper for chat history
-  supabase/           Server, admin, and browser Supabase clients
+lib/                    Shared utilities
+  server-data.ts        Core orchestration layer
+  env.ts                Zod-validated environment config
+  types.ts              TypeScript type definitions
+  annotations.ts        Annotation processing helpers
+  kv.ts                 KV cache wrapper for chat history
+  utils.ts              General utilities
+  supabase/             Server, admin, and browser Supabase clients
 
-python_service/       FastAPI ingestion pipeline
-  main.py             arXiv resolution, PDF extraction, LLM annotation
+python_service/         FastAPI ingestion pipeline
+  main.py               arXiv resolution, PDF extraction, LLM annotation
 
 supabase/
-  schema.sql          Database schema with RLS policies
+  schema.sql            Database schema with RLS policies
+
+docs/                   Architecture and development documentation
 ```
 
 ## License
