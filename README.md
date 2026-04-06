@@ -4,7 +4,7 @@
 
 Annotagent automatically reads, analyzes, and annotates academic papers — generating precise inline highlights, contextual notes, and jargon definitions anchored directly to PDF coordinates. A built-in chat interface lets you interrogate any paper with full-text context, turning passive reading into active inquiry.
 
-**[Live demo](https://annotagent.vercel.app/)**
+**[Live Deployment](https://annotagent.vercel.app/)**
 
 ---
 
@@ -21,24 +21,24 @@ Annotagent automatically reads, analyzes, and annotates academic papers — gene
 ┌───────────────────────────────────────────────────────────┐
 │  Next.js 15 App Router (Vercel)                           │
 │                                                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐ │
-│  │ PDF Workspace │  │  Chat Panel  │  │  Auth / Library  ││
-│  │ react-pdf +   │  │  Streaming   │  │  Supabase Auth   ││
-│  │ SVG overlays  │  │  AI SDK      │  │  SSR client      ││
-│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘ │
-│         │                 │                    │          │
-│  ┌──────┴─────────────────┴────────────────────┴────────┐ │
-│  │             Server Data Layer (lib/)                  │ │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐  │
+│  │ PDF Workspace│  │  Chat Panel  │  │  Auth / Library │  │
+│  │ react-pdf +  │  │  Streaming   │  │  Supabase Auth  │  │
+│  │ SVG overlays │  │  AI SDK      │  │  SSR client     │  │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘  │
+│         │                 │                   │           │
+│  ┌──────┴─────────────────┴───────────────────┴─────────┐ │
+│  │             Server Data Layer (lib/)                 │ │
 │  │   Orchestration · PDF caching · Auth guards          │ │
 │  └──────────────────────┬───────────────────────────────┘ │
 └─────────────────────────┼─────────────────────────────────┘
                           │
-              ┌───────────┴────────────┐
-              │  FastAPI Python Service │
-              │  arXiv fetch · PyMuPDF  │
-              │  LLM annotation pipeline│
-              │  Pydantic validation    │
-              └───────────┬────────────┘
+              ┌───────────┴──────────────┐
+              │  FastAPI Python Service  │
+              │  arXiv fetch · PyMuPDF   │
+              │  LLM annotation pipeline │
+              │  Pydantic validation     │
+              └───────────┬──────────────┘
                           │
               ┌───────────┴────────────┐
               │   Supabase (Postgres)  │
