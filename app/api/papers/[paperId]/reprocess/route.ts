@@ -3,6 +3,8 @@ import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { reprocessPaperAnnotations } from "@/lib/server-data";
 
+export const maxDuration = 300;
+
 type Props = {
   params: Promise<{
     paperId: string;

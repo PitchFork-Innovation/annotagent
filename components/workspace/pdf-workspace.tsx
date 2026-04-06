@@ -4,6 +4,7 @@ import { RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Document, Page, pdfjs } from "react-pdf";
 import { RichText } from "@/components/rich-text";
+import { readJsonResponse } from "@/lib/http";
 import type { AnnotationRecord, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
@@ -119,10 +120,15 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         },
         body: JSON.stringify({ jobId })
       });
-      const json = await response.json();
+      const json = await readJsonResponse<{ error?: string; annotationCount?: number }>(response);
 
       if (!response.ok) {
         setReprocessMessage(json.error ?? "Unable to reprocess annotations.");
+        return;
+      }
+
+      if (typeof json.annotationCount !== "number") {
+        setReprocessMessage("The reprocess request completed without a valid annotation count.");
         return;
       }
 

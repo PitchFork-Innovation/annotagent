@@ -3,6 +3,8 @@ import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { ensurePaperIngested } from "@/lib/server-data";
 
+export const maxDuration = 300;
+
 const bodySchema = z.object({
   arxivId: z.string().min(4),
   jobId: z.string().uuid().optional()

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
 import { AuthPanel } from "@/components/auth-panel";
+import { readJsonResponse } from "@/lib/http";
 import type { PaperListItem, UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -60,15 +61,22 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
         },
         body: JSON.stringify({ arxivId, jobId })
       });
-      const json = await response.json();
+      const json = await readJsonResponse<{ error?: string; paper?: { id: string } }>(response);
 
       if (!response.ok) {
         setError(json.error ?? "Unable to annotate that paper.");
         return;
       }
 
+      if (!json.paper?.id) {
+        setError("The annotation service returned an incomplete response.");
+        return;
+      }
+
+      const paperId = json.paper.id;
+
       startTransition(() => {
-        router.push(`/paper/${json.paper.id}`);
+        router.push(`/paper/${paperId}`);
       });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to annotate that paper.");
