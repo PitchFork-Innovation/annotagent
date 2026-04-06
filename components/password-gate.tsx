@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const STORAGE_KEY = "annotagent_access";
 const CORRECT_HASH = "annotate!";
 
 /* Floating annotation marks for atmosphere */
@@ -49,18 +48,13 @@ function ScanLine() {
 }
 
 export function PasswordGate({ children }: { children: React.ReactNode }) {
-  const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [authorized, setAuthorized] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState(false);
   const [shaking, setShaking] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [typedChars, setTypedChars] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    setAuthorized(stored === "granted");
-  }, []);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -69,7 +63,6 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
         setError(false);
         setUnlocking(true);
         setTimeout(() => {
-          localStorage.setItem(STORAGE_KEY, "granted");
           setAuthorized(true);
         }, 900);
       } else {
@@ -86,8 +79,6 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
     [password]
   );
 
-  // Hydration: show nothing until we know
-  if (authorized === null) return null;
   if (authorized) return <>{children}</>;
 
   return (
