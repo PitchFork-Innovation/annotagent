@@ -140,6 +140,82 @@ a {
   animation: chatSendFlight 0.9s ease-in-out infinite;
 }
 
+/* ── Password gate animations ── */
+
+@keyframes gateShake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-8px); }
+  30% { transform: translateX(7px); }
+  45% { transform: translateX(-5px); }
+  60% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+  90% { transform: translateX(1px); }
+}
+
+.gate-shake {
+  animation: gateShake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@keyframes gateUnlock {
+  0% { opacity: 1; }
+  40% { opacity: 1; }
+  100% { opacity: 0; pointer-events: none; }
+}
+
+.gate-unlock {
+  animation: gateUnlock 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes gateContentUnlock {
+  0% { transform: scale(1); opacity: 1; filter: blur(0); }
+  100% { transform: scale(0.96); opacity: 0; filter: blur(6px); }
+}
+
+.gate-content-unlock {
+  animation: gateContentUnlock 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes gatePulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.04); }
+}
+
+.gate-pulse {
+  animation: gatePulse 3s ease-in-out infinite;
+}
+
+@keyframes gateDotEnter {
+  from { transform: scale(0); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.gate-dot-enter {
+  animation: gateDotEnter 0.15s ease-out forwards;
+}
+
+@keyframes scanLine {
+  0% { top: -2%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 102%; opacity: 0; }
+}
+
+.scan-line {
+  animation: scanLine 6s linear infinite;
+}
+
+@keyframes floatDrift {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-12px) rotate(1deg); }
+}
+
+.floating-mark-1 { animation: floatDrift 7s ease-in-out infinite; }
+.floating-mark-2 { animation: floatDrift 9s ease-in-out infinite; animation-delay: -2s; }
+.floating-mark-3 { animation: floatDrift 8s ease-in-out infinite; animation-delay: -4s; }
+.floating-mark-4 { animation: floatDrift 10s ease-in-out infinite; animation-delay: -1s; }
+.floating-mark-5 { animation: floatDrift 7.5s ease-in-out infinite; animation-delay: -3s; }
+.floating-mark-6 { animation: floatDrift 8.5s ease-in-out infinite; animation-delay: -5s; }
+
 /* PDF text layer override */
 .react-pdf__Page__textContent {
   pointer-events: none;
