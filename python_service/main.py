@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -681,11 +682,71 @@ def is_arxiv_rate_limit_error(error: arxiv.HTTPError) -> bool:
     return "HTTP 429" in str(error)
 
 
-async def fetch_pdf_bytes(pdf_url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        response = await client.get(pdf_url)
-        response.raise_for_status()
-        return response.content
+def build_pdf_candidates(source_url: str, arxiv_id: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        normalized = ensure_pdf_suffix(url.replace("http://", "https://", 1))
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    add(source_url)
+    add(f"https://arxiv.org/pdf/{arxiv_id}.pdf")
+    add(f"https://export.arxiv.org/pdf/{arxiv_id}.pdf")
+    add(f"https://arxiv.org/pdf/{arxiv_id}")
+    add(f"https://export.arxiv.org/pdf/{arxiv_id}")
+    return candidates
+
+
+def ensure_pdf_suffix(url: str) -> str:
+    if re.match(r"^https://(?:export\.)?arxiv\.org/pdf/[^/]+$", url, re.IGNORECASE):
+        return f"{url}.pdf"
+
+    return url
+
+
+async def fetch_pdf_bytes_with_fallback(source_url: str, arxiv_id: str) -> bytes:
+    failures: list[str] = []
+    candidates = build_pdf_candidates(source_url, arxiv_id)
+
+    async with httpx.AsyncClient(
+        timeout=60.0,
+        follow_redirects=True,
+        headers={
+            "Accept": "application/pdf",
+            "User-Agent": "AnnotAgent/1.0 (+https://annotagent.vercel.app)",
+        },
+    ) as client:
+        for url in candidates:
+            for attempt in range(1, 4):
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    if content_type and "pdf" not in content_type:
+                        failures.append(f"{url} -> non-PDF content-type: {content_type}")
+                        break
+
+                    return response.content
+                except (httpx.HTTPError, httpx.InvalidURL) as error:
+                    message = str(error)
+                    logger.warning(
+                        "PDF fetch attempt %s/3 failed for %s (%s): %s",
+                        attempt,
+                        arxiv_id,
+                        url,
+                        message,
+                    )
+                    if attempt == 3:
+                        failures.append(f"{url} -> {message}")
+                    else:
+                        await asyncio.sleep(1.5 * attempt)
+
+    raise HTTPException(status_code=502, detail=failures[0] if failures else "Unable to fetch PDF.")
 
 
 async def run_annotation_pipeline(
@@ -700,7 +761,7 @@ async def run_annotation_pipeline(
 ) -> IngestResponse:
     write_progress(job_id, {"status": "running", "stage": "fetching_pdf", "message": pdf_progress_message})
     logger.info("Fetching PDF bytes from %s for %s", pdf_source_label, arxiv_id)
-    pdf_bytes = await fetch_pdf_bytes(pdf_url)
+    pdf_bytes = await fetch_pdf_bytes_with_fallback(pdf_url, arxiv_id)
 
     write_progress(job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
     logger.info("Opening PDF with PyMuPDF for %s", arxiv_id)
