@@ -4,6 +4,8 @@
 
 :root {
   color-scheme: dark;
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+  --font-mono: "SFMono-Regular", "JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
 html,
