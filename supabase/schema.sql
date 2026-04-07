@@ -27,6 +27,7 @@ create table if not exists annotations (
 );
 
 alter table papers add column if not exists ai_summary text;
+alter table papers add column if not exists annotation_style text not null default 'default';
 alter table annotations add column if not exists anchor jsonb;
 
 create table if not exists user_papers (

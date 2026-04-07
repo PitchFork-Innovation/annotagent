@@ -76,10 +76,54 @@ ANNOTATION_VALIDATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
     '"note": string, "importance": 1 | 2 | 3, "page_number": int }'
 )
-ANNOTATION_SHARED_RULES = """
+ANNOTATION_STYLE_DEFAULT = """
 Target reader:
 - technically literate and comfortable with scientific writing
-- not guaranteed to know this exact subfield's jargon, datasets, or named methods
+- does not know jargon, datasets, or named methods in this exact subfield
+""".strip()
+
+ANNOTATION_STYLE_NOVICE = """
+Target reader:
+- not technical and new to both the field and scientific writing in general
+- do not assume familiarity with any technical terms, scientific jargon, or mathematical concepts
+- terms like optimization, gradient descent, loss function, embedding, baseline, classifier, attention mechanism, convolution, regression, and similar general technical vocabulary must all be defined
+
+Annotation density:
+- produce significantly more annotations than the default style
+- lower the bar for what is worth annotating — when in doubt, annotate
+- define every acronym, named method, benchmark, dataset, loss function, architecture, and mathematical concept encountered
+- add notes that explain why a method or result matters in plain language, avoiding assumptions about prior knowledge
+""".strip()
+
+ANNOTATION_STYLE_EXPERT = """
+Target reader:
+- an active researcher or practitioner in the paper's specific subfield
+- already familiar with standard terminology, well-known methods, common benchmarks, and foundational concepts in this area
+
+Annotation focus — novelty discovery:
+- focus annotations on what is genuinely new: novel methods, architectures, training procedures, or formulations that depart from established approaches
+- highlight surprising or counterintuitive results and explain why they are unexpected given prior work
+- annotate methodological choices that break from convention and explain the trade-offs
+- surface implications for the broader field and related lines of research — how do these results change what practitioners should do or investigate next?
+- call out limitations that affect reproducibility, generalization, or real-world applicability
+
+Annotation density:
+- produce fewer annotations than the default style — only annotate when there is genuine insight to add
+- suppress definitions for standard subfield terminology — only define truly novel or paper-specific terms and notation
+- do not annotate well-known benchmarks, standard architectures, or common evaluation metrics unless the paper uses them in an unusual way
+- skip general framing and background sections unless they contain a novel claim or surprising recontextualization
+""".strip()
+
+ANNOTATION_STYLES: dict[str, str] = {
+    "default": ANNOTATION_STYLE_DEFAULT,
+    "novice": ANNOTATION_STYLE_NOVICE,
+    "expert": ANNOTATION_STYLE_EXPERT,
+}
+
+
+def build_annotation_shared_rules(style: str = "default") -> str:
+    target_reader_block = ANNOTATION_STYLES.get(style, ANNOTATION_STYLE_DEFAULT)
+    return f"""{target_reader_block}
 
 Core goal:
 - produce only high-value annotations that materially improve understanding
@@ -89,7 +133,7 @@ Core goal:
 Annotation types:
 - highlight: central claim, main contribution, key result, important method detail, or major limitation
 - note: non-obvious implication, assumption, caveat, comparison, or interpretation that adds insight beyond paraphrase
-- definition: specialized jargon, acronym, benchmark, dataset, or named method a technical non-expert may not know
+- definition: specialized jargon, acronym, benchmark, dataset, or named method the target reader may not know
 
 text_ref rules:
 - text_ref must be the SHORTEST EXACT QUOTE from the passage that supports the annotation
@@ -112,6 +156,9 @@ Anti-noise rules:
 - do not emit duplicate annotations or multiple annotations with the same normalized text_ref
 - return [] if the passage contains little worth annotating
 """.strip()
+
+
+ANNOTATION_SHARED_RULES = build_annotation_shared_rules("default")
 
 ANNOTATION_FEWSHOT_EXAMPLES = [
     {
@@ -293,7 +340,8 @@ ANNOTATION_VALIDATION_FEWSHOT_EXAMPLES = [
     },
 ]
 
-ANNOTATION_PROMPT = f"""
+def build_annotation_prompt(style: str = "default") -> str:
+    return f"""
 You are an expert research paper annotator.
 
 Return ONLY a JSON array that exactly matches this schema:
@@ -301,7 +349,7 @@ Return ONLY a JSON array that exactly matches this schema:
 
 Follow the shared rules below and emulate the few-shot examples as closely as possible.
 
-{ANNOTATION_SHARED_RULES}
+{build_annotation_shared_rules(style)}
 
 Final requirements:
 - every text_ref must be an exact substring from the passage
@@ -309,7 +357,9 @@ Final requirements:
 - no markdown, no prose, no explanation outside the JSON array
 """.strip()
 
-ANNOTATION_REPAIR_PROMPT = f"""
+
+def build_annotation_repair_prompt(style: str = "default") -> str:
+    return f"""
 You repair annotation outputs into valid JSON arrays for the annotation task.
 
 Return ONLY a JSON array that exactly matches this schema:
@@ -325,7 +375,9 @@ Additional repair requirements:
 - prefer deleting a weak annotation over keeping filler
 """.strip()
 
-ANNOTATION_VALIDATION_PROMPT = f"""
+
+def build_annotation_validation_prompt(style: str = "default") -> str:
+    return f"""
 You are an annotation validation agent.
 
 Return ONLY a corrected JSON array that exactly matches this schema:
@@ -334,7 +386,7 @@ Return ONLY a corrected JSON array that exactly matches this schema:
 You may shorten, rewrite, deduplicate, or delete annotations.
 Follow the shared rules below and emulate the few-shot examples as closely as possible.
 
-{ANNOTATION_SHARED_RULES}
+{build_annotation_shared_rules(style)}
 
 Validation requirements:
 - every text_ref must be an exact substring of the provided page excerpt for that page_number
@@ -342,6 +394,11 @@ Validation requirements:
 - do not invent facts not grounded in the source excerpt
 - if an annotation cannot be made valid while staying useful, delete it
 """.strip()
+
+
+ANNOTATION_PROMPT = build_annotation_prompt()
+ANNOTATION_REPAIR_PROMPT = build_annotation_repair_prompt()
+ANNOTATION_VALIDATION_PROMPT = build_annotation_validation_prompt()
 
 def dump_prompt_json(value: object) -> str:
     return json.dumps(sanitize_prompt_value(value), ensure_ascii=True, indent=2)
@@ -394,8 +451,10 @@ def build_annotation_messages(
     local_context: str | None = None,
     page_number: int | None = None,
     section_hint: str | None = None,
+    annotation_style: str = "default",
 ) -> list[dict[str, str]]:
-    messages = [{"role": "system", "content": ANNOTATION_PROMPT}]
+    prompt = build_annotation_prompt(annotation_style) if annotation_style != "default" else ANNOTATION_PROMPT
+    messages = [{"role": "system", "content": prompt}]
     for example in ANNOTATION_FEWSHOT_EXAMPLES:
         messages.append({"role": "user", "content": build_annotation_request_content(example["passage"])})
         messages.append({"role": "assistant", "content": dump_prompt_json(example["output"])})
@@ -452,8 +511,11 @@ def build_validation_request_content(page_sources: dict[int, str], annotations: 
 def build_annotation_validation_messages(
     page_sources: dict[int, str],
     annotations: list[dict[str, object]],
+    *,
+    annotation_style: str = "default",
 ) -> list[dict[str, str]]:
-    messages = [{"role": "system", "content": ANNOTATION_VALIDATION_PROMPT}]
+    prompt = build_annotation_validation_prompt(annotation_style) if annotation_style != "default" else ANNOTATION_VALIDATION_PROMPT
+    messages = [{"role": "system", "content": prompt}]
     for example in ANNOTATION_VALIDATION_FEWSHOT_EXAMPLES:
         messages.append(
             {
@@ -487,6 +549,7 @@ Rules:
 class IngestRequest(BaseModel):
     arxiv_id: str = Field(min_length=4)
     job_id: str | None = None
+    annotation_style: Literal["default", "novice", "expert"] = "default"
 
 
 class ReprocessRequest(BaseModel):
@@ -495,6 +558,7 @@ class ReprocessRequest(BaseModel):
     abstract: str = ""
     pdf_url: str = Field(min_length=1)
     job_id: str | None = None
+    annotation_style: Literal["default", "novice", "expert"] = "default"
 
 
 class SummaryRequest(BaseModel):
@@ -563,6 +627,7 @@ class IngestResponse(BaseModel):
     pageCount: int
     starterQuestions: list[str]
     annotations: list[Annotation]
+    annotationStyle: Literal["default", "novice", "expert"] = "default"
 
 
 class SummaryResponse(BaseModel):
@@ -633,6 +698,7 @@ async def ingest(request: IngestRequest, http_request: Request) -> IngestRespons
         abstract=paper.summary,
         pdf_url=paper.pdf_url,
         job_id=request.job_id,
+        annotation_style=request.annotation_style,
         pdf_progress_message="Fetching PDF from arXiv...",
         pdf_source_label="arXiv",
     )
@@ -653,6 +719,7 @@ async def reprocess(request: ReprocessRequest, http_request: Request) -> IngestR
         abstract=request.abstract,
         pdf_url=request.pdf_url,
         job_id=request.job_id,
+        annotation_style=request.annotation_style,
         pdf_progress_message="Fetching cached PDF...",
         pdf_source_label="cached storage",
     )
@@ -836,6 +903,7 @@ async def run_annotation_pipeline(
     abstract: str,
     pdf_url: str,
     job_id: str | None,
+    annotation_style: str = "default",
     pdf_progress_message: str,
     pdf_source_label: str,
 ) -> IngestResponse:
@@ -876,8 +944,8 @@ async def run_annotation_pipeline(
             "totalChunks": len(chunks),
         },
     )
-    annotations = annotate_chunks(chunks, blocks, page_sources, pdf_doc, title=title, abstract=abstract, job_id=job_id)
-    logger.info("Produced %s annotations for %s", len(annotations), arxiv_id)
+    annotations = annotate_chunks(chunks, blocks, page_sources, pdf_doc, title=title, abstract=abstract, job_id=job_id, annotation_style=annotation_style)
+    logger.info("Produced %s annotations for %s (style=%s)", len(annotations), arxiv_id, annotation_style)
     write_progress(
         job_id,
         {
@@ -899,6 +967,7 @@ async def run_annotation_pipeline(
         pageCount=pdf_doc.page_count,
         starterQuestions=build_starter_questions(title),
         annotations=annotations,
+        annotationStyle=annotation_style,
     )
 
 
@@ -1008,6 +1077,7 @@ def annotate_chunks(
     title: str,
     abstract: str,
     job_id: str | None = None,
+    annotation_style: str = "default",
 ) -> list[Annotation]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1051,6 +1121,7 @@ def annotate_chunks(
                     local_context=build_chunk_neighbor_context(chunks, index - 1),
                     page_number=chunk["page_number"],
                     section_hint=chunk.get("section_hint"),
+                    annotation_style=annotation_style,
                 ),
             )
 
@@ -1139,7 +1210,7 @@ def annotate_chunks(
         len(annotations) - len(deduped_annotations),
         summarize_annotations(deduped_annotations),
     )
-    validated_annotations = validate_annotations(client, model_name, deduped_annotations, page_sources)
+    validated_annotations = validate_annotations(client, model_name, deduped_annotations, page_sources, annotation_style=annotation_style)
     logger.info(
         "After LLM validation: %s annotations remain: %s",
         len(validated_annotations),
@@ -1685,6 +1756,8 @@ def validate_annotations(
     model_name: str,
     annotations: list[Annotation],
     page_sources: dict[int, str],
+    *,
+    annotation_style: str = "default",
 ) -> list[Annotation]:
     if not annotations:
         return []
@@ -1704,6 +1777,7 @@ def validate_annotations(
             messages=build_annotation_validation_messages(
                 {page_number: page_source},
                 [serialize_annotation_for_validation(annotation) for annotation in page_annotations],
+                annotation_style=annotation_style,
             ),
         )
 

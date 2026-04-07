@@ -36,5 +36,6 @@ export const ingestionPayloadSchema = z.object({
   fullText: z.string().min(1),
   pageCount: z.number().int().positive(),
   starterQuestions: z.array(z.string()),
+  annotationStyle: z.enum(["default", "novice", "expert"]).optional().default("default"),
   annotations: z.array(annotationSchema)
 });

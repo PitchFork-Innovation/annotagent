@@ -1,4 +1,5 @@
 export type AnnotationType = "highlight" | "note" | "definition";
+export type AnnotationStyle = "default" | "novice" | "expert";
 
 export type HighlightFragment = {
   x: number;
@@ -45,6 +46,7 @@ export type PaperRecord = {
   pageCount: number;
   fullText: string;
   starterQuestions: string[];
+  annotationStyle: AnnotationStyle;
 };
 
 export type ChatMessage = {
@@ -80,6 +82,7 @@ export type IngestionPayload = {
   fullText: string;
   pageCount: number;
   starterQuestions: string[];
+  annotationStyle?: AnnotationStyle;
   annotations: Array<{
     page_number: number;
     type: AnnotationType;

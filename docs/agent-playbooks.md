@@ -121,3 +121,22 @@
 - Verify:
   - Python tests for Python-side prompt changes
   - TypeScript checks if env or payload handling changed
+
+## Change Or Add An Annotation Style
+- Read first:
+  - `docs/ai-contracts.md`
+  - `docs/python-ingestion.md`
+- Inspect next:
+  - `python_service/main.py` — style block constants, `ANNOTATION_STYLES` dict, `build_annotation_shared_rules`
+  - `lib/types.ts` — `AnnotationStyle` union
+  - `lib/ingestion-schema.ts` — Zod enum
+  - `components/landing-shell.tsx` and `components/workspace/pdf-workspace.tsx` — dropdowns
+- To add a new style: add a constant, register it in `ANNOTATION_STYLES`, extend the `Literal` in `IngestRequest`/`ReprocessRequest`/`IngestResponse`, extend `AnnotationStyle` in TypeScript, update the Zod enum, and add an `<option>` in both dropdowns
+- Preserve:
+  - style injection replaces only the "Target reader" section — do not alter other shared rules in the style block
+  - all three prompt-building functions (`build_annotation_prompt`, `build_annotation_repair_prompt`, `build_annotation_validation_prompt`) must receive the style
+  - `annotationStyle` must be returned in `IngestResponse` and persisted to `papers.annotation_style`
+- Verify:
+  - `python3 -m py_compile python_service/main.py`
+  - `npm run typecheck`
+  - `npm run lint`

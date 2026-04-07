@@ -51,6 +51,7 @@ Annotagent automatically reads, analyzes, and annotates academic papers — gene
 ## Key Features
 
 - **Multi-stage annotation pipeline** — Few-shot generation, LLM-based repair of malformed outputs, cross-page validation with page-source grounding, and PDF-native bbox refinement using text search against the rendered document.
+- **Annotation style presets** — Choose between Default, Novice (non-technical reader; defines all jargon and general technical terms, higher density), and Expert (active practitioner; focuses on novelty discovery, field implications, and prior-work comparisons, lower density) before ingesting or reprocessing a paper.
 - **Rolling memory system** — The annotation pipeline maintains a compact memory of paper state, defined terms, covered topics, and recent annotations across chunks to ensure coherence and avoid redundancy over long papers.
 - **Text anchor resolution** — Annotations are anchored to exact character offsets within page text, enabling precise positioning even when the same term appears multiple times on a page.
 - **Deterministic paper briefs** — Before annotation begins, the pipeline samples early, middle, and late chunks to build a structural brief that guides annotation quality across the full document.

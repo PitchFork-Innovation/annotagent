@@ -41,9 +41,10 @@
 - Chat must stay paper-bounded. The system prompt tells the model to use only the paper context.
 
 ### Reprocess Annotations
-- Workspace UI starts a reprocess request and polls `/api/ingest/progress` with a `jobId`.
-- `/api/papers/[paperId]/reprocess` requires auth and delegates to `reprocessPaperAnnotations`.
-- Server data reruns the Python pipeline, updates the paper row, replaces annotations, and refreshes the workspace.
+- Workspace UI presents a style dropdown (pre-populated from `paper.annotationStyle`) and a reprocess button.
+- User selects a style and triggers reprocess; the browser calls `/api/papers/[paperId]/reprocess/authorize` to get a short-lived token, then calls the Python `/reprocess` endpoint directly with `annotation_style` in the request body.
+- The Python service runs the full pipeline with the chosen style and returns an `IngestionPayload` including `annotationStyle`.
+- The browser posts the payload to `/api/papers/[paperId]/reprocess/apply`, which replaces annotations and updates `papers.annotation_style` in Supabase.
 - Progress status is written by the Python side to temp files and exposed by the progress route.
 
 ## Where To Start By Boundary

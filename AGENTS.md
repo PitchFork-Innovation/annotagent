@@ -10,12 +10,16 @@
 - Data: Supabase Postgres, Supabase Auth, Supabase Storage, optional KV REST chat persistence.
 - Ingestion: FastAPI service in `python_service/` using PyMuPDF, OpenAI, and Pydantic validation.
 
+## PRDs
+- All PRDs must be created under the `prds/` folder.
+
 ## Repo Rules
 - Preserve the current split:
   - route handlers validate/authenticate and delegate
   - `lib/server-data.ts` owns orchestration and cross-service data flow
   - `python_service/` owns PDF extraction, annotation generation, and summary generation
-- Keep contracts synchronized across boundaries. If you change schema or payload shape, inspect `supabase/schema.sql`, `lib/types.ts`, `lib/server-data.ts`, route handlers, and Python models/prompts together.
+- Keep contracts synchronized across boundaries. If you change schema or payload shape, inspect `supabase/schema.sql`, `lib/types.ts`, `lib/ingestion-schema.ts`, `lib/server-data.ts`, route handlers, and Python models/prompts together.
+- Annotation style (`"default"` | `"novice"` | `"expert"`) flows from UI → Python request body → `IngestResponse.annotationStyle` → `papers.annotation_style` → `PaperRecord.annotationStyle`. Any new style requires updates at every point in this chain plus the UI dropdowns.
 - Prefer small coherent changes over broad rewrites. Follow existing naming and file placement before introducing new patterns.
 - Maintain docs with the code. If behavior, architecture, or workflow expectations change, update the relevant page in `docs/` in the same change.
 

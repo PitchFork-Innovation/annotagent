@@ -54,9 +54,17 @@
   - `OPENAI_ANNOTATION_TIMEOUT_SECONDS`
 - The Next.js side also depends on `PYTHON_SERVICE_URL` and `PYTHON_INGEST_TIMEOUT_MS` when calling this service.
 
+## Annotation Style
+- `/ingest` and `/reprocess` accept an optional `annotation_style` field (`"default"` | `"novice"` | `"expert"`, defaults to `"default"`).
+- The style is passed through `run_annotation_pipeline` → `annotate_chunks` → all prompt-building functions.
+- `build_annotation_shared_rules(style)` selects the matching style block and injects it in place of the "Target reader" section. All other rules in `ANNOTATION_SHARED_RULES` are unchanged.
+- `build_annotation_prompt`, `build_annotation_repair_prompt`, and `build_annotation_validation_prompt` are functions that call `build_annotation_shared_rules(style)` internally.
+- The chosen style is returned in the `IngestResponse` as `annotationStyle` and stored in `papers.annotation_style`.
+- See `docs/ai-contracts.md` for the full style semantics.
+
 ## Cross-Boundary Rules
 - Python owns the ingest response contract, but TypeScript consumes it. Keep `IngestionPayload` in `lib/types.ts` synchronized with Python output.
-- If annotation shape, page numbering, or summary fields change, update both Python and TypeScript in the same change.
+- If annotation shape, page numbering, summary fields, or style fields change, update both Python and TypeScript in the same change.
 - Keep prompt rules aligned with few-shot examples and validation logic in `python_service/main.py`.
 
 ## Common Change Patterns
@@ -64,6 +72,7 @@
 - Late-paper context issue: inspect the annotation brief sampling, rolling-memory helpers, local context windowing, and memory compression path before increasing annotation count or model size.
 - Annotation throughput issue: prefer tightening deterministic brief generation, rolling-memory caps, and local-context window sizes before adding new model-side context logic.
 - Missing or bad highlights: prefer prompt/validation fixes before broadening annotation count.
+- Style not applied correctly: confirm `annotation_style` is passed from the UI through the Python request body; confirm `build_annotation_shared_rules` is called in all three prompt-building functions; confirm style is threaded through `validate_annotations`.
 - Reprocess behavior bug: inspect progress writing, `/api/ingest/progress`, and replacement semantics in `reprocessPaperAnnotations`.
 - Summary changes: inspect both Python `/summarize` behavior and the `ensurePaperSummary` fallback path in TypeScript.
 

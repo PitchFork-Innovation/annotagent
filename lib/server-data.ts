@@ -57,6 +57,7 @@ type WorkspacePaperRow = {
   page_count: number;
   full_text: string;
   starter_questions: string[] | null;
+  annotation_style: string | null;
 };
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
@@ -135,7 +136,8 @@ export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace
       pdfUrl: paper.pdf_url,
       pageCount: paper.page_count,
       fullText: paper.full_text,
-      starterQuestions: paper.starter_questions ?? []
+      starterQuestions: paper.starter_questions ?? [],
+      annotationStyle: (paper.annotation_style as "default" | "novice" | "expert") ?? "default"
     },
     annotations: (annotationsResult.data ?? []).map(mapAnnotationRow),
     chatHistory
@@ -519,7 +521,7 @@ async function fetchPaperWorkspaceRow(
 }
 
 function getPaperWorkspaceSelect(includeSummary: boolean) {
-  const base = "id, arxiv_id, title, abstract, pdf_url, page_count, full_text, starter_questions";
+  const base = "id, arxiv_id, title, abstract, pdf_url, page_count, full_text, starter_questions, annotation_style";
   return includeSummary ? `${base}, ai_summary` : base;
 }
 
@@ -639,7 +641,8 @@ function buildPaperMutationPayload(payload: IngestionPayload, cachedPdfUrl: stri
     pdf_url: cachedPdfUrl,
     page_count: payload.pageCount,
     full_text: payload.fullText,
-    starter_questions: payload.starterQuestions
+    starter_questions: payload.starterQuestions,
+    annotation_style: payload.annotationStyle ?? "default"
   };
 
   return includeSummary

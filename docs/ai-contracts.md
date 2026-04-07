@@ -48,6 +48,18 @@
 - The rolling memory is Python-process-local only, deterministically compressed, and is not persisted or exposed in the public payload contract.
 - Repair and validation stages exist to recover malformed output and remove weak or duplicate annotations.
 
+## Annotation Style Contract
+- An `annotation_style` field (`"default"` | `"novice"` | `"expert"`) flows from the client through the Python request body and back in the response as `annotationStyle`.
+- The style is persisted in the `papers.annotation_style` column and returned on `PaperRecord` as `annotationStyle` so the workspace can pre-populate the reprocess dropdown.
+- Style injection replaces only the "Target reader" section of `ANNOTATION_SHARED_RULES`. All other shared rules (annotation types, text_ref rules, note writing rules, anti-noise rules) are style-invariant.
+- Style blocks are defined as constants (`ANNOTATION_STYLE_DEFAULT`, `ANNOTATION_STYLE_NOVICE`, `ANNOTATION_STYLE_EXPERT`) and selected via `build_annotation_shared_rules(style)`.
+- `ANNOTATION_PROMPT`, `ANNOTATION_REPAIR_PROMPT`, and `ANNOTATION_VALIDATION_PROMPT` are built via functions that accept the style parameter; pre-built default constants remain available for backward compat.
+- Style is threaded through: endpoint → `run_annotation_pipeline` → `annotate_chunks` → `build_annotation_messages` / `validate_annotations` → `build_annotation_validation_messages`.
+- **Default**: technically literate reader unfamiliar with the specific subfield. Balanced annotation density. Equivalent to the pre-style behavior.
+- **Novice**: non-technical reader new to scientific writing. Define all technical terms including general vocabulary (embedding, gradient, baseline, etc.). Higher annotation density.
+- **Expert**: active practitioner in the subfield. Focus on novelty discovery — novel methods, surprising results, field implications, prior-work comparisons, and non-obvious limitations. Skip definitions for standard subfield terminology. Lower annotation density.
+- Adding a new style requires: new constant in `python_service/main.py`, entry in `ANNOTATION_STYLES` dict, enum update in `IngestRequest`/`ReprocessRequest`/`IngestResponse`, and matching update to the `AnnotationStyle` union in `lib/types.ts`, `lib/ingestion-schema.ts`, and both UI dropdowns.
+
 ## Summary Contract
 - Summary generation is Python-owned and should return concise text suitable for the “AI key points” card.
 - TypeScript treats the summary as optional and falls back to abstract text when absent or when schema support is missing.

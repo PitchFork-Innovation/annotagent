@@ -6,7 +6,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import { RichText } from "@/components/rich-text";
 import { readJsonResponse } from "@/lib/http";
 import { authorizePythonReprocess, fetchPythonProgress, runPythonReprocess } from "@/lib/python-service";
-import type { AnnotationRecord, PaperWorkspace } from "@/lib/types";
+import type { AnnotationRecord, AnnotationStyle, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
@@ -39,6 +39,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
   const [isReprocessing, setIsReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState<IngestProgress | null>(null);
+  const [reprocessStyle, setReprocessStyle] = useState<AnnotationStyle>(workspace.paper.annotationStyle ?? "default");
   const pdfFileUrl = `/api/papers/${workspace.paper.id}/pdf`;
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -119,7 +120,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         }
       }, 1000);
 
-      const payload = await runPythonReprocess(authorization.pythonServiceUrl, authorization.token, workspace.paper, jobId);
+      const payload = await runPythonReprocess(authorization.pythonServiceUrl, authorization.token, workspace.paper, jobId, reprocessStyle);
       const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess/apply`, {
         method: "POST",
         headers: {
@@ -216,6 +217,16 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         >
           {isReprocessing ? "Reprocessing..." : "Reprocess annotations"}
         </button>
+        <select
+          className="rounded border border-rim bg-cave px-2 py-1 font-mono text-[11px] text-linen outline-none focus:border-gold/40 disabled:opacity-50"
+          value={reprocessStyle}
+          onChange={(e) => setReprocessStyle(e.target.value as AnnotationStyle)}
+          disabled={isReprocessing}
+        >
+          <option value="default">Default</option>
+          <option value="novice">Novice</option>
+          <option value="expert">Expert</option>
+        </select>
         {reprocessMessage ? (
           <p className="font-mono text-[11px] text-fog">{reprocessMessage}</p>
         ) : null}

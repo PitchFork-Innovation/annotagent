@@ -83,8 +83,11 @@
 ## Coupled Contracts
 - `PaperWorkspace`, `PaperRecord`, `AnnotationRecord`, and `IngestionPayload` in `lib/types.ts` are the main TypeScript contracts.
 - Annotation records may now include a deterministic text `anchor` in addition to `bbox`; keep Python JSON, database rows, server mapping, and workspace consumers in sync.
+- `PaperRecord` now includes `annotationStyle` read from `papers.annotation_style` and returned by `getPaperWorkspace`. The workspace uses this to pre-populate the reprocess style dropdown.
+- `IngestionPayload` includes an optional `annotationStyle` field emitted by the Python service and written to `papers.annotation_style` via `buildPaperMutationPayload`.
 - If you change fields in the Python ingest response, update:
   - `lib/types.ts`
+  - `lib/ingestion-schema.ts`
   - `lib/server-data.ts`
   - affected route handlers
   - frontend consumers

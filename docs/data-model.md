@@ -16,7 +16,8 @@
 ## Tables
 - `papers`
   - one row per `arxiv_id`
-  - stores title, abstract, full text, PDF URL, page count, starter questions, and optional `ai_summary`
+  - stores title, abstract, full text, PDF URL, page count, starter questions, optional `ai_summary`, and `annotation_style` (text, default `'default'`)
+  - `annotation_style` records which preset style (`default` | `novice` | `expert`) was used to generate the current annotations; updated on each reprocess
 - `annotations`
   - child rows keyed by `paper_id`
   - stores `page_number`, `type`, `text_ref`, `note`, `importance`, and JSON `bbox`
@@ -43,6 +44,7 @@
 - Annotations are page-scoped and rely on valid bounding boxes for overlay rendering. Stored boxes should be as close as possible to the final `text_ref`, not just the original source chunk, and stored anchors should remain aligned with the page-level extracted text.
 - PDF URLs may point to cached Supabase storage, but the PDF API route also preserves arXiv fallback fetching.
 - `ai_summary` is treated as optional in code because older schemas may not have the column yet.
+- `annotation_style` defaults to `'default'` for all existing rows when the column is added; no migration of old annotations is required.
 - KV chat persistence is optional and failure-tolerant.
 
 ## If You Change Data Shape, Also Inspect

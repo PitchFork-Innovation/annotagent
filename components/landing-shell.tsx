@@ -5,7 +5,7 @@ import { FormEvent, useState, useTransition } from "react";
 import { AuthPanel } from "@/components/auth-panel";
 import { readJsonResponse } from "@/lib/http";
 import { authorizePythonIngest, fetchPythonProgress, runPythonIngest } from "@/lib/python-service";
-import type { PaperListItem, UserProfile } from "@/lib/types";
+import type { AnnotationStyle, PaperListItem, UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -29,6 +29,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<IngestProgress | null>(null);
+  const [annotationStyle, setAnnotationStyle] = useState<AnnotationStyle>("default");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -60,7 +61,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
         }
       }, 1000);
 
-      const payload = await runPythonIngest(authorization.pythonServiceUrl, authorization.token, arxivId, jobId);
+      const payload = await runPythonIngest(authorization.pythonServiceUrl, authorization.token, arxivId, jobId, annotationStyle);
       const response = await fetch("/api/ingest/apply", {
         method: "POST",
         headers: {
@@ -187,6 +188,23 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                   </button>
                 </div>
               </form>
+
+              <div className="flex items-center gap-2">
+                <label htmlFor="annotation-style" className="font-mono text-[11px] text-fog">
+                  Annotation style:
+                </label>
+                <select
+                  id="annotation-style"
+                  className="rounded border border-rim bg-cave px-2 py-1 font-mono text-[11px] text-linen outline-none focus:border-gold/40"
+                  value={annotationStyle}
+                  onChange={(e) => setAnnotationStyle(e.target.value as AnnotationStyle)}
+                  disabled={isSubmitting || isPending}
+                >
+                  <option value="default">Default</option>
+                  <option value="novice">Novice</option>
+                  <option value="expert">Expert</option>
+                </select>
+              </div>
 
               {/* Progress indicator */}
               {isSubmitting && (
