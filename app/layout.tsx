@@ -4,7 +4,7 @@ import "katex/dist/katex.min.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import { Providers } from "@/components/providers";
-import { PasswordGate } from "@/components/password-gate";
+// import { PasswordGate } from "@/components/password-gate";
 
 export const metadata: Metadata = {
   title: "Annotagent",
@@ -20,7 +20,8 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <Providers>
-          <PasswordGate>{children}</PasswordGate>
+          {/* <PasswordGate>{children}</PasswordGate> */}
+          {children}
         </Providers>
       </body>
     </html>
