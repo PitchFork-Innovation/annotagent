@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createPythonServiceToken } from "@/lib/python-auth";
 import { env } from "@/lib/env";
 
-export async function GET(request: NextRequest) {
-  const jobId = request.nextUrl.searchParams.get("jobId");
+const searchSchema = z.object({
+  jobId: z.string().uuid(),
+  action: z.enum(["ingest", "reprocess"]).default("ingest")
+});
 
-  if (!jobId) {
+export async function GET(request: NextRequest) {
+  const parsed = searchSchema.safeParse({
+    jobId: request.nextUrl.searchParams.get("jobId"),
+    action: request.nextUrl.searchParams.get("action") ?? "ingest"
+  });
+
+  if (!parsed.success) {
     return NextResponse.json({ error: "jobId is required." }, { status: 400 });
   }
+
+  const { jobId, action } = parsed.data;
 
   try {
     const url = new URL("/progress", env.PYTHON_SERVICE_URL);
@@ -15,7 +26,7 @@ export async function GET(request: NextRequest) {
     const response = await fetch(url.toString(), {
       cache: "no-store",
       headers: {
-        Authorization: `Bearer ${createPythonServiceToken(jobId, "ingest")}`
+        Authorization: `Bearer ${createPythonServiceToken(jobId, action)}`
       }
     });
     const text = await response.text();

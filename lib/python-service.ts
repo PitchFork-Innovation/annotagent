@@ -14,6 +14,8 @@ type ProgressPayload = {
   totalChunks?: number;
 };
 
+type PythonProgressAction = "ingest" | "reprocess";
+
 function buildPythonUrl(baseUrl: string, pathname: string, searchParams?: Record<string, string>) {
   const url = new URL(pathname, `${baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`}`);
 
@@ -55,12 +57,13 @@ export async function authorizePythonReprocess(paperId: string, jobId: string) {
   return readJsonResponse<AuthorizationResponse & { error?: string }>(response);
 }
 
-export async function fetchPythonProgress(baseUrl: string, token: string, jobId: string) {
-  const response = await fetch(buildPythonUrl(baseUrl, "/progress", { jobId }), {
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
+export async function fetchPythonProgress(jobId: string, action: PythonProgressAction = "ingest") {
+  const searchParams = new URLSearchParams({
+    jobId,
+    action
+  });
+  const response = await fetch(`/api/ingest/progress?${searchParams.toString()}`, {
+    cache: "no-store"
   });
 
   const payload = await readJsonResponse<ProgressPayload & { detail?: string }>(response);

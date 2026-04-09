@@ -114,7 +114,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
 
       progressInterval = window.setInterval(async () => {
         try {
-          const json = await fetchPythonProgress(authorization.pythonServiceUrl, authorization.token, jobId);
+          const json = await fetchPythonProgress(jobId, "reprocess");
           setReprocessProgress(json);
         } catch {
           // Leave the current progress state in place during transient polling failures.
