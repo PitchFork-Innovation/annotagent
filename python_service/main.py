@@ -24,6 +24,15 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import NotFoundError, OpenAI
 from pydantic import BaseModel, Field
 
+try:
+    from redis import Redis
+    from redis.exceptions import RedisError
+except ImportError:  # pragma: no cover - local fallback before dependency install
+    Redis = None  # type: ignore[assignment]
+
+    class RedisError(Exception):
+        pass
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env.local")
@@ -67,6 +76,13 @@ BLOCKED_TEXT_REFS_LIMIT = 24
 CHUNK_SIZE = 1400
 CHUNK_OVERLAP = 120
 PYTHON_SERVICE_SHARED_SECRET = os.getenv("PYTHON_SERVICE_SHARED_SECRET", "dev-python-shared-secret")
+KV_REDIS_URL = os.getenv("KV_REDIS_URL")
+KV_REST_API_URL = os.getenv("KV_REST_API_URL")
+KV_REST_API_TOKEN = os.getenv("KV_REST_API_TOKEN")
+PROGRESS_TTL_SECONDS = int(os.getenv("PROGRESS_TTL_SECONDS", "86400"))
+PROGRESS_HTTP_TIMEOUT_SECONDS = float(os.getenv("PROGRESS_HTTP_TIMEOUT_SECONDS", "5"))
+PROGRESS_DIR = Path(tempfile.gettempdir()) / "annotagent-progress"
+PROGRESS_REDIS_CLIENT: Redis | None = None
 
 ANNOTATION_SCHEMA = (
     '{ "type": "highlight" | "note" | "definition", "text_ref": string, '
@@ -659,16 +675,15 @@ def health() -> dict[str, str]:
 @app.get("/progress", response_model=ProgressResponse)
 def progress(jobId: str, request: Request) -> ProgressResponse:
     authorize_python_service_request(request, None, jobId)
-    progress_path = Path(tempfile.gettempdir()) / "annotagent-progress" / f"{jobId}.json"
+    payload = read_progress(jobId)
 
-    if not progress_path.exists():
+    if payload is None:
         return ProgressResponse(
             status="pending",
             stage="queued",
             message="Waiting for annotation pipeline to report progress.",
         )
 
-    payload = json.loads(progress_path.read_text(encoding="utf-8"))
     return ProgressResponse(**payload)
 
 
@@ -2460,10 +2475,142 @@ def write_progress(job_id: str | None, payload: dict) -> None:
     if not job_id:
         return
 
-    progress_dir = Path(tempfile.gettempdir()) / "annotagent-progress"
-    progress_dir.mkdir(parents=True, exist_ok=True)
-    progress_path = progress_dir / f"{job_id}.json"
-    progress_path.write_text(json.dumps(payload), encoding="utf-8")
+    serialized_payload = json.dumps(payload)
+    write_progress_to_file(job_id, serialized_payload)
+    write_progress_to_redis(job_id, serialized_payload)
+    write_progress_to_kv(job_id, serialized_payload)
+
+
+def read_progress(job_id: str) -> dict | None:
+    payload = read_progress_from_redis(job_id)
+
+    if payload is not None:
+        return payload
+
+    payload = read_progress_from_kv(job_id)
+
+    if payload is not None:
+        return payload
+
+    return read_progress_from_file(job_id)
+
+
+def read_progress_from_file(job_id: str) -> dict | None:
+    progress_path = PROGRESS_DIR / f"{job_id}.json"
+
+    if not progress_path.exists():
+        return None
+
+    try:
+        return json.loads(progress_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning("Unable to decode local progress payload for job %s", job_id)
+        return None
+
+
+def write_progress_to_file(job_id: str, serialized_payload: str) -> None:
+    PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    progress_path = PROGRESS_DIR / f"{job_id}.json"
+    progress_path.write_text(serialized_payload, encoding="utf-8")
+
+
+def read_progress_from_kv(job_id: str) -> dict | None:
+    if not KV_REST_API_URL or not KV_REST_API_TOKEN:
+        return None
+
+    try:
+        response = httpx.get(
+            f"{KV_REST_API_URL.rstrip('/')}/get/{build_progress_cache_key(job_id)}",
+            headers={"Authorization": f"Bearer {KV_REST_API_TOKEN}"},
+            timeout=PROGRESS_HTTP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json().get("result")
+
+        if not payload:
+            return None
+
+        return json.loads(payload)
+    except (httpx.HTTPError, json.JSONDecodeError) as error:
+        logger.warning("Unable to read progress from KV for job %s: %s", job_id, error)
+        return None
+
+
+def write_progress_to_kv(job_id: str, serialized_payload: str) -> None:
+    if not KV_REST_API_URL or not KV_REST_API_TOKEN:
+        return
+
+    try:
+        response = httpx.post(
+            f"{KV_REST_API_URL.rstrip('/')}/set/{build_progress_cache_key(job_id)}",
+            headers={
+                "Authorization": f"Bearer {KV_REST_API_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "value": serialized_payload,
+                "ex": PROGRESS_TTL_SECONDS,
+            },
+            timeout=PROGRESS_HTTP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as error:
+        logger.warning("Unable to write progress to KV for job %s: %s", job_id, error)
+
+
+def get_progress_redis_client() -> Redis | None:
+    global PROGRESS_REDIS_CLIENT
+
+    if not KV_REDIS_URL:
+        return None
+
+    if Redis is None:
+        logger.warning("KV_REDIS_URL is set but the redis package is not installed.")
+        return None
+
+    if PROGRESS_REDIS_CLIENT is None:
+        PROGRESS_REDIS_CLIENT = Redis.from_url(
+            KV_REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=PROGRESS_HTTP_TIMEOUT_SECONDS,
+            socket_timeout=PROGRESS_HTTP_TIMEOUT_SECONDS,
+        )
+
+    return PROGRESS_REDIS_CLIENT
+
+
+def read_progress_from_redis(job_id: str) -> dict | None:
+    client = get_progress_redis_client()
+
+    if client is None:
+        return None
+
+    try:
+        payload = client.get(build_progress_cache_key(job_id))
+
+        if not payload:
+            return None
+
+        return json.loads(payload)
+    except (RedisError, json.JSONDecodeError) as error:
+        logger.warning("Unable to read progress from Redis for job %s: %s", job_id, error)
+        return None
+
+
+def write_progress_to_redis(job_id: str, serialized_payload: str) -> None:
+    client = get_progress_redis_client()
+
+    if client is None:
+        return
+
+    try:
+        client.set(build_progress_cache_key(job_id), serialized_payload, ex=PROGRESS_TTL_SECONDS)
+    except RedisError as error:
+        logger.warning("Unable to write progress to Redis for job %s: %s", job_id, error)
+
+
+def build_progress_cache_key(job_id: str) -> str:
+    return f"annotagent:job:{job_id}:progress"
 
 
 def build_starter_questions(title: str) -> list[str]:
