@@ -115,6 +115,10 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
       progressInterval = window.setInterval(async () => {
         try {
           const json = await fetchPythonProgress(jobId, "reprocess");
+          console.log("[annotagent] reprocess progress", {
+            jobId,
+            progress: json
+          });
           setReprocessProgress(json);
         } catch {
           // Leave the current progress state in place during transient polling failures.

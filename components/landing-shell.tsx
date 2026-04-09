@@ -56,6 +56,10 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
       progressInterval = window.setInterval(async () => {
         try {
           const json = await fetchPythonProgress(jobId, "ingest");
+          console.log("[annotagent] ingest progress", {
+            jobId,
+            progress: json
+          });
           setProgress(json);
         } catch {
           // ignore transient polling failures
