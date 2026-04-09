@@ -707,7 +707,7 @@ async def ingest(request: IngestRequest, http_request: Request) -> IngestRespons
     logger.info("Trying annotation models %s", ", ".join(ANNOTATION_MODELS))
 
     logger.info("Resolving arXiv paper metadata for %s", normalized_arxiv_id)
-    paper = resolve_arxiv_paper(normalized_arxiv_id)
+    paper = await asyncio.to_thread(resolve_arxiv_paper, normalized_arxiv_id)
 
     return await run_annotation_pipeline(
         arxiv_id=normalized_arxiv_id,
@@ -931,80 +931,107 @@ async def run_annotation_pipeline(
     logger.info("Fetching PDF bytes from %s for %s", pdf_source_label, arxiv_id)
     pdf_bytes = await fetch_pdf_bytes_with_fallback(pdf_url, arxiv_id)
 
-    write_progress(job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
-    logger.info("Opening PDF with PyMuPDF for %s", arxiv_id)
-    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    write_progress(job_id, {"status": "running", "stage": "extracting_blocks", "message": "Extracting text blocks from PDF..."})
-    logger.info("Extracting text blocks for %s", arxiv_id)
-    blocks = extract_blocks(pdf_doc)
-    full_text = "\n\n".join(block["text"] for block in blocks)
-
-    write_progress(job_id, {"status": "running", "stage": "summarizing", "message": "Generating AI key points..."})
-    logger.info("Generating paper summary for %s", arxiv_id)
-    summary = summarize_paper(title, abstract, full_text)
-
-    write_progress(job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
-    logger.info("Chunking extracted text for %s", arxiv_id)
-    chunks = chunk_blocks(blocks)
-    page_sources = build_page_sources(blocks)
-    logger.info(
-        "Extracted %s blocks and %s chunks for %s",
-        len(blocks),
-        len(chunks),
-        arxiv_id,
-    )
-    write_progress(
-        job_id,
-        {
-            "status": "running",
-            "stage": "annotating",
-            "message": "Generating annotations with OpenAI...",
-            "currentChunk": 0,
-            "totalChunks": len(chunks),
-        },
-    )
-    annotations = annotate_chunks(
-        chunks,
-        blocks,
-        page_sources,
-        pdf_doc,
+    return await asyncio.to_thread(
+        run_annotation_pipeline_blocking,
+        arxiv_id=arxiv_id,
         title=title,
         abstract=abstract,
+        pdf_url=pdf_url,
+        pdf_bytes=pdf_bytes,
         job_id=job_id,
         annotation_style=annotation_style,
         annotation_pathway=annotation_pathway,
     )
-    logger.info(
-        "Produced %s annotations for %s (style=%s, pathway=%s)",
-        len(annotations),
-        arxiv_id,
-        annotation_style,
-        annotation_pathway,
-    )
-    write_progress(
-        job_id,
-        {
-            "status": "completed",
-            "stage": "completed",
-            "message": "Annotation generation complete.",
-            "currentChunk": len(chunks),
-            "totalChunks": len(chunks),
-        },
-    )
 
-    return IngestResponse(
-        arxivId=arxiv_id,
-        title=title,
-        abstract=abstract,
-        summary=summary,
-        pdfUrl=pdf_url,
-        fullText=full_text,
-        pageCount=pdf_doc.page_count,
-        starterQuestions=build_starter_questions(title),
-        annotations=annotations,
-        annotationStyle=annotation_style,
-    )
+
+def run_annotation_pipeline_blocking(
+    *,
+    arxiv_id: str,
+    title: str,
+    abstract: str,
+    pdf_url: str,
+    pdf_bytes: bytes,
+    job_id: str | None,
+    annotation_style: str = "default",
+    annotation_pathway: str = "validated",
+) -> IngestResponse:
+    write_progress(job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
+    logger.info("Opening PDF with PyMuPDF for %s", arxiv_id)
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    try:
+        write_progress(job_id, {"status": "running", "stage": "extracting_blocks", "message": "Extracting text blocks from PDF..."})
+        logger.info("Extracting text blocks for %s", arxiv_id)
+        blocks = extract_blocks(pdf_doc)
+        full_text = "\n\n".join(block["text"] for block in blocks)
+
+        write_progress(job_id, {"status": "running", "stage": "summarizing", "message": "Generating AI key points..."})
+        logger.info("Generating paper summary for %s", arxiv_id)
+        summary = summarize_paper(title, abstract, full_text)
+
+        write_progress(job_id, {"status": "running", "stage": "chunking", "message": "Chunking extracted text..."})
+        logger.info("Chunking extracted text for %s", arxiv_id)
+        chunks = chunk_blocks(blocks)
+        page_sources = build_page_sources(blocks)
+        logger.info(
+            "Extracted %s blocks and %s chunks for %s",
+            len(blocks),
+            len(chunks),
+            arxiv_id,
+        )
+        write_progress(
+            job_id,
+            {
+                "status": "running",
+                "stage": "annotating",
+                "message": "Generating annotations with OpenAI...",
+                "currentChunk": 0,
+                "totalChunks": len(chunks),
+            },
+        )
+        annotations = annotate_chunks(
+            chunks,
+            blocks,
+            page_sources,
+            pdf_doc,
+            title=title,
+            abstract=abstract,
+            job_id=job_id,
+            annotation_style=annotation_style,
+            annotation_pathway=annotation_pathway,
+        )
+        logger.info(
+            "Produced %s annotations for %s (style=%s, pathway=%s)",
+            len(annotations),
+            arxiv_id,
+            annotation_style,
+            annotation_pathway,
+        )
+        write_progress(
+            job_id,
+            {
+                "status": "completed",
+                "stage": "completed",
+                "message": "Annotation generation complete.",
+                "currentChunk": len(chunks),
+                "totalChunks": len(chunks),
+            },
+        )
+
+        return IngestResponse(
+            arxivId=arxiv_id,
+            title=title,
+            abstract=abstract,
+            summary=summary,
+            pdfUrl=pdf_url,
+            fullText=full_text,
+            pageCount=pdf_doc.page_count,
+            starterQuestions=build_starter_questions(title),
+            annotations=annotations,
+            annotationStyle=annotation_style,
+        )
+    finally:
+        pdf_doc.close()
 
 
 def extract_blocks(pdf_doc: fitz.Document) -> list[dict]:
