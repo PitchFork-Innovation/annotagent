@@ -31,6 +31,7 @@
 - Resolve validated `text_ref` strings into deterministic page-text anchors, then back onto the PDF with PyMuPDF so stored bounding boxes are term- or phrase-level rather than chunk-level whenever possible.
 - Generate a paper summary for the frontend summary card and stored `ai_summary`.
 - Emit progress updates keyed by `jobId` so the Next.js app can poll status.
+- On hosted multi-instance deployments, persist progress through shared Redis when `KV_REDIS_URL` is configured, or through shared KV REST when `KV_REST_API_URL` and `KV_REST_API_TOKEN` are configured; local temp files remain a development fallback.
 
 ## Annotation Contract
 - Types:

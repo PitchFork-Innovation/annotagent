@@ -97,8 +97,10 @@ Required variables:
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only) |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `PYTHON_SERVICE_URL` | URL of the FastAPI ingestion service |
-| `KV_REST_API_URL` | *(Optional)* Vercel KV endpoint for chat persistence |
-| `KV_REST_API_TOKEN` | *(Optional)* Vercel KV token |
+| `KV_REDIS_URL` | *(Optional)* Direct Redis connection URL for shared ingest progress on the Python service |
+| `KV_REST_API_URL` | *(Optional)* Vercel KV endpoint for chat persistence and shared ingest progress |
+| `KV_REST_API_TOKEN` | *(Optional)* Vercel KV token shared by Vercel and the Python service |
+| `PROGRESS_TTL_SECONDS` | *(Optional)* TTL for stored ingest progress updates |
 
 ### Frontend
 

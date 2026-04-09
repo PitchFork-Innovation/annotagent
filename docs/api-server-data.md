@@ -79,6 +79,7 @@
 - `reprocessPaperAnnotations` first proves the current user owns the paper through `user_papers`.
 - Reprocess prefers the cached storage PDF when present, but should fall back to the paper's saved `pdf_url` if the cache object is missing so older papers can still be regenerated.
 - Chat history is optional. Missing KV env vars should not break chat responses.
+- Shared ingest progress on multi-instance Python deployments relies on optional shared Redis or KV REST config; without it, progress falls back to the Python host's local temp storage.
 
 ## Coupled Contracts
 - `PaperWorkspace`, `PaperRecord`, `AnnotationRecord`, and `IngestionPayload` in `lib/types.ts` are the main TypeScript contracts.

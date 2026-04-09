@@ -45,7 +45,7 @@
 - User selects a style and triggers reprocess; the browser calls `/api/papers/[paperId]/reprocess/authorize` to get a short-lived token, then calls the Python `/reprocess` endpoint directly with `annotation_style` in the request body.
 - The Python service runs the full pipeline with the chosen style and returns an `IngestionPayload` including `annotationStyle`.
 - The browser posts the payload to `/api/papers/[paperId]/reprocess/apply`, which replaces annotations and updates `papers.annotation_style` in Supabase.
-- Progress status is written by the Python side to temp files and exposed by the progress route.
+- Progress status is written by the Python side to shared Redis or KV REST when configured, with temp-file fallback for local development, and exposed by the progress route.
 
 ## Where To Start By Boundary
 - Page or route selection issue: inspect `app/`
