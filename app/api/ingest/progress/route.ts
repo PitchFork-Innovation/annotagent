@@ -21,6 +21,10 @@ export async function GET(request: NextRequest) {
   const { jobId, action } = parsed.data;
 
   try {
+    console.info("[annotagent] progress proxy request", {
+      action,
+      jobId
+    });
     const url = new URL("/progress", env.PYTHON_SERVICE_URL);
     url.searchParams.set("jobId", jobId);
     const response = await fetch(url.toString(), {
@@ -30,6 +34,13 @@ export async function GET(request: NextRequest) {
       }
     });
     const text = await response.text();
+    console.info("[annotagent] progress proxy response", {
+      action,
+      jobId,
+      ok: response.ok,
+      status: response.status,
+      body: text
+    });
 
     if (!response.ok) {
       return NextResponse.json({
@@ -44,7 +55,12 @@ export async function GET(request: NextRequest) {
         "Content-Type": "application/json"
       }
     });
-  } catch {
+  } catch (error) {
+    console.warn("[annotagent] progress proxy error", {
+      action,
+      jobId,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return NextResponse.json({
       status: "pending",
       stage: "queued",
