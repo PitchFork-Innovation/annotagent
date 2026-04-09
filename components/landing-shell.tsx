@@ -5,7 +5,7 @@ import { FormEvent, useState, useTransition } from "react";
 import { AuthPanel } from "@/components/auth-panel";
 import { readJsonResponse } from "@/lib/http";
 import { authorizePythonIngest, fetchPythonProgress, runPythonIngest } from "@/lib/python-service";
-import type { AnnotationStyle, PaperListItem, UserProfile } from "@/lib/types";
+import type { AnnotationPathway, AnnotationStyle, PaperListItem, UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -30,6 +30,7 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<IngestProgress | null>(null);
   const [annotationStyle, setAnnotationStyle] = useState<AnnotationStyle>("default");
+  const [annotationPathway, setAnnotationPathway] = useState<AnnotationPathway>("direct");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -61,7 +62,14 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
         }
       }, 1000);
 
-      const payload = await runPythonIngest(authorization.pythonServiceUrl, authorization.token, arxivId, jobId, annotationStyle);
+      const payload = await runPythonIngest(
+        authorization.pythonServiceUrl,
+        authorization.token,
+        arxivId,
+        jobId,
+        annotationStyle,
+        annotationPathway
+      );
       const response = await fetch("/api/ingest/apply", {
         method: "POST",
         headers: {
@@ -184,12 +192,12 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                         ? "Processing..."
                         : isPending
                           ? "Opening..."
-                          : "Run →"}
+                          : "Annotate →"}
                   </button>
                 </div>
               </form>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
                 <label htmlFor="annotation-style" className="font-mono text-[11px] text-fog">
                   Annotation style:
                 </label>
@@ -203,6 +211,19 @@ export function LandingShell({ user, papers, hasAuthError = false }: Props) {
                   <option value="default">Default</option>
                   <option value="novice">Novice</option>
                   <option value="expert">Expert</option>
+                </select>
+                <label htmlFor="annotation-pathway" className="font-mono text-[11px] text-fog">
+                  Pathway:
+                </label>
+                <select
+                  id="annotation-pathway"
+                  className="rounded border border-rim bg-cave px-2 py-1 font-mono text-[11px] text-linen outline-none focus:border-gold/40"
+                  value={annotationPathway}
+                  onChange={(e) => setAnnotationPathway(e.target.value as AnnotationPathway)}
+                  disabled={isSubmitting || isPending}
+                >
+                  <option value="direct">Instant</option>
+                  <option value="validated">Thinking</option>
                 </select>
               </div>
 

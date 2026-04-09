@@ -6,7 +6,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import { RichText } from "@/components/rich-text";
 import { readJsonResponse } from "@/lib/http";
 import { authorizePythonReprocess, fetchPythonProgress, runPythonReprocess } from "@/lib/python-service";
-import type { AnnotationRecord, AnnotationStyle, PaperWorkspace } from "@/lib/types";
+import type { AnnotationPathway, AnnotationRecord, AnnotationStyle, PaperWorkspace } from "@/lib/types";
 import { annotationTone, importanceStyle } from "@/lib/annotations";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
@@ -40,6 +40,7 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
   const [isReprocessing, setIsReprocessing] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState<IngestProgress | null>(null);
   const [reprocessStyle, setReprocessStyle] = useState<AnnotationStyle>(workspace.paper.annotationStyle ?? "default");
+  const [reprocessPathway, setReprocessPathway] = useState<AnnotationPathway>("direct");
   const pdfFileUrl = `/api/papers/${workspace.paper.id}/pdf`;
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -120,7 +121,14 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         }
       }, 1000);
 
-      const payload = await runPythonReprocess(authorization.pythonServiceUrl, authorization.token, workspace.paper, jobId, reprocessStyle);
+      const payload = await runPythonReprocess(
+        authorization.pythonServiceUrl,
+        authorization.token,
+        workspace.paper,
+        jobId,
+        reprocessStyle,
+        reprocessPathway
+      );
       const response = await fetch(`/api/papers/${workspace.paper.id}/reprocess/apply`, {
         method: "POST",
         headers: {
@@ -217,7 +225,11 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         >
           {isReprocessing ? "Reprocessing..." : "Reprocess annotations"}
         </button>
+        <label className="font-mono text-[11px] text-fog" htmlFor="reprocess-style">
+          Style:
+        </label>
         <select
+          id="reprocess-style"
           className="rounded border border-rim bg-cave px-2 py-1 font-mono text-[11px] text-linen outline-none focus:border-gold/40 disabled:opacity-50"
           value={reprocessStyle}
           onChange={(e) => setReprocessStyle(e.target.value as AnnotationStyle)}
@@ -226,6 +238,19 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
           <option value="default">Default</option>
           <option value="novice">Novice</option>
           <option value="expert">Expert</option>
+        </select>
+        <label className="font-mono text-[11px] text-fog" htmlFor="reprocess-pathway">
+          Pathway:
+        </label>
+        <select
+          id="reprocess-pathway"
+          className="rounded border border-rim bg-cave px-2 py-1 font-mono text-[11px] text-linen outline-none focus:border-gold/40 disabled:opacity-50"
+          value={reprocessPathway}
+          onChange={(e) => setReprocessPathway(e.target.value as AnnotationPathway)}
+          disabled={isReprocessing}
+        >
+          <option value="direct">Instant</option>
+          <option value="validated">Thinking</option>
         </select>
         {reprocessMessage ? (
           <p className="font-mono text-[11px] text-fog">{reprocessMessage}</p>

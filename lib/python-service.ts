@@ -1,4 +1,4 @@
-import type { AnnotationStyle, IngestionPayload, PaperRecord } from "./types";
+import type { AnnotationPathway, AnnotationStyle, IngestionPayload, PaperRecord } from "./types";
 import { readJsonResponse } from "./http";
 
 type AuthorizationResponse = {
@@ -72,14 +72,22 @@ export async function fetchPythonProgress(baseUrl: string, token: string, jobId:
   return payload;
 }
 
-export async function runPythonIngest(baseUrl: string, token: string, arxivId: string, jobId: string, annotationStyle: AnnotationStyle = "default") {
+export async function runPythonIngest(
+  baseUrl: string,
+  token: string,
+  arxivId: string,
+  jobId: string,
+  annotationStyle: AnnotationStyle = "default",
+  annotationPathway: AnnotationPathway = "validated"
+) {
   const response = await fetch(buildPythonUrl(baseUrl, "/ingest"), {
     method: "POST",
     headers: buildAuthHeaders(token),
     body: JSON.stringify({
       arxiv_id: arxivId,
       job_id: jobId,
-      annotation_style: annotationStyle
+      annotation_style: annotationStyle,
+      annotation_pathway: annotationPathway
     })
   });
 
@@ -92,7 +100,14 @@ export async function runPythonIngest(baseUrl: string, token: string, arxivId: s
   return payload;
 }
 
-export async function runPythonReprocess(baseUrl: string, token: string, paper: Pick<PaperRecord, "arxivId" | "title" | "abstract" | "pdfUrl">, jobId: string, annotationStyle: AnnotationStyle = "default") {
+export async function runPythonReprocess(
+  baseUrl: string,
+  token: string,
+  paper: Pick<PaperRecord, "arxivId" | "title" | "abstract" | "pdfUrl">,
+  jobId: string,
+  annotationStyle: AnnotationStyle = "default",
+  annotationPathway: AnnotationPathway = "validated"
+) {
   const response = await fetch(buildPythonUrl(baseUrl, "/reprocess"), {
     method: "POST",
     headers: buildAuthHeaders(token),
@@ -102,7 +117,8 @@ export async function runPythonReprocess(baseUrl: string, token: string, paper: 
       abstract: paper.abstract,
       pdf_url: paper.pdfUrl,
       job_id: jobId,
-      annotation_style: annotationStyle
+      annotation_style: annotationStyle,
+      annotation_pathway: annotationPathway
     })
   });
 

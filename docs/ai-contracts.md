@@ -47,6 +47,9 @@
   - small neighboring chunk snippets plus page and optional section hints
 - The rolling memory is Python-process-local only, deterministically compressed, and is not persisted or exposed in the public payload contract.
 - Repair and validation stages exist to recover malformed output and remove weak or duplicate annotations.
+- Annotation generation now has two pathways:
+  - `validated`: includes the post-generation LLM validation pass
+  - `direct`: skips the LLM validation pass but keeps deterministic local cleanup
 
 ## Annotation Style Contract
 - An `annotation_style` field (`"default"` | `"novice"` | `"expert"`) flows from the client through the Python request body and back in the response as `annotationStyle`.
@@ -59,6 +62,12 @@
 - **Novice**: non-technical reader new to scientific writing. Define all technical terms including general vocabulary (embedding, gradient, baseline, etc.). Higher annotation density.
 - **Expert**: active practitioner in the subfield. Focus on novelty discovery — novel methods, surprising results, field implications, prior-work comparisons, and non-obvious limitations. Skip definitions for standard subfield terminology. Lower annotation density.
 - Adding a new style requires: new constant in `python_service/main.py`, entry in `ANNOTATION_STYLES` dict, enum update in `IngestRequest`/`ReprocessRequest`/`IngestResponse`, and matching update to the `AnnotationStyle` union in `lib/types.ts`, `lib/ingestion-schema.ts`, and both UI dropdowns.
+
+## Annotation Pathway Contract
+- An `annotation_pathway` field (`"validated"` | `"direct"`) flows from the client to Python on ingest and reprocess requests.
+- `validated` runs the current full pipeline including the validation agent.
+- `direct` skips only the validation agent. Deduplication, deterministic local validation, text anchors, bbox refinement, and response validation still apply.
+- Pathway is not part of the persisted paper contract. It is not returned in `IngestResponse`, not stored on `papers`, and not exposed on `PaperRecord`.
 
 ## Summary Contract
 - Summary generation is Python-owned and should return concise text suitable for the “AI key points” card.

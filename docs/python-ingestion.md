@@ -27,7 +27,7 @@
   - adjacent chunk snippets plus page and optional section metadata
 - Maintain and compress the rolling memory deterministically in Python so prompt context stays concise without extra OpenAI calls.
 - Repair malformed annotation output when needed.
-- Validate and deduplicate annotations across the full paper.
+- Deduplicate annotations across the full paper, then optionally run the LLM validation pathway before deterministic local cleanup.
 - Resolve validated `text_ref` strings into deterministic page-text anchors, then back onto the PDF with PyMuPDF so stored bounding boxes are term- or phrase-level rather than chunk-level whenever possible.
 - Generate a paper summary for the frontend summary card and stored `ai_summary`.
 - Emit progress updates keyed by `jobId` so the Next.js app can poll status.
@@ -63,6 +63,12 @@
 - The chosen style is returned in the `IngestResponse` as `annotationStyle` and stored in `papers.annotation_style`.
 - See `docs/ai-contracts.md` for the full style semantics.
 
+## Annotation Pathway
+- `/ingest` and `/reprocess` also accept an optional `annotation_pathway` field (`"validated"` | `"direct"`, defaults to `"validated"`).
+- `validated` preserves the current behavior: dedupe, run the LLM validation pass, then run deterministic local validation, text-anchor assignment, and bbox refinement.
+- `direct` skips only the LLM validation pass. JSON repair, dedupe, deterministic local validation, text-anchor assignment, and bbox refinement still run.
+- Pathway is a request-time control only. Unlike `annotation_style`, it is not returned in `IngestResponse` and is not stored in Supabase.
+
 ## Cross-Boundary Rules
 - Python owns the ingest response contract, but TypeScript consumes it. Keep `IngestionPayload` in `lib/types.ts` synchronized with Python output.
 - If annotation shape, page numbering, summary fields, or style fields change, update both Python and TypeScript in the same change.
@@ -74,6 +80,7 @@
 - Annotation throughput issue: prefer tightening deterministic brief generation, rolling-memory caps, and local-context window sizes before adding new model-side context logic.
 - Missing or bad highlights: prefer prompt/validation fixes before broadening annotation count.
 - Style not applied correctly: confirm `annotation_style` is passed from the UI through the Python request body; confirm `build_annotation_shared_rules` is called in all three prompt-building functions; confirm style is threaded through `validate_annotations`.
+- Pathway behaving incorrectly: confirm `annotation_pathway` is passed from the UI through the Python request body; confirm `annotate_chunks` only skips `validate_annotations` for the `direct` pathway and still runs local validation and bbox refinement.
 - Reprocess behavior bug: inspect progress writing, `/api/ingest/progress`, and replacement semantics in `reprocessPaperAnnotations`.
 - Summary changes: inspect both Python `/summarize` behavior and the `ensurePaperSummary` fallback path in TypeScript.
 

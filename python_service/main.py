@@ -566,6 +566,7 @@ class IngestRequest(BaseModel):
     arxiv_id: str = Field(min_length=4)
     job_id: str | None = None
     annotation_style: Literal["default", "novice", "expert"] = "default"
+    annotation_pathway: Literal["validated", "direct"] = "validated"
 
 
 class ReprocessRequest(BaseModel):
@@ -575,6 +576,7 @@ class ReprocessRequest(BaseModel):
     pdf_url: str = Field(min_length=1)
     job_id: str | None = None
     annotation_style: Literal["default", "novice", "expert"] = "default"
+    annotation_pathway: Literal["validated", "direct"] = "validated"
 
 
 class SummaryRequest(BaseModel):
@@ -714,6 +716,7 @@ async def ingest(request: IngestRequest, http_request: Request) -> IngestRespons
         pdf_url=paper.pdf_url,
         job_id=request.job_id,
         annotation_style=request.annotation_style,
+        annotation_pathway=request.annotation_pathway,
         pdf_progress_message="Fetching PDF from arXiv...",
         pdf_source_label="arXiv",
     )
@@ -735,6 +738,7 @@ async def reprocess(request: ReprocessRequest, http_request: Request) -> IngestR
         pdf_url=request.pdf_url,
         job_id=request.job_id,
         annotation_style=request.annotation_style,
+        annotation_pathway=request.annotation_pathway,
         pdf_progress_message="Fetching cached PDF...",
         pdf_source_label="cached storage",
     )
@@ -919,6 +923,7 @@ async def run_annotation_pipeline(
     pdf_url: str,
     job_id: str | None,
     annotation_style: str = "default",
+    annotation_pathway: str = "validated",
     pdf_progress_message: str,
     pdf_source_label: str,
 ) -> IngestResponse:
@@ -959,8 +964,24 @@ async def run_annotation_pipeline(
             "totalChunks": len(chunks),
         },
     )
-    annotations = annotate_chunks(chunks, blocks, page_sources, pdf_doc, title=title, abstract=abstract, job_id=job_id, annotation_style=annotation_style)
-    logger.info("Produced %s annotations for %s (style=%s)", len(annotations), arxiv_id, annotation_style)
+    annotations = annotate_chunks(
+        chunks,
+        blocks,
+        page_sources,
+        pdf_doc,
+        title=title,
+        abstract=abstract,
+        job_id=job_id,
+        annotation_style=annotation_style,
+        annotation_pathway=annotation_pathway,
+    )
+    logger.info(
+        "Produced %s annotations for %s (style=%s, pathway=%s)",
+        len(annotations),
+        arxiv_id,
+        annotation_style,
+        annotation_pathway,
+    )
     write_progress(
         job_id,
         {
@@ -1093,6 +1114,7 @@ def annotate_chunks(
     abstract: str,
     job_id: str | None = None,
     annotation_style: str = "default",
+    annotation_pathway: str = "validated",
 ) -> list[Annotation]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1207,16 +1229,6 @@ def annotate_chunks(
                 f"OpenAI annotation failed on page {chunk['page_number']} with model {model_name}: {error}"
             ) from error
 
-    write_progress(
-        job_id,
-        {
-            "status": "running",
-            "stage": "validating",
-            "message": "Validating annotations...",
-            "currentChunk": len(chunks),
-            "totalChunks": len(chunks),
-        },
-    )
     logger.info("Collected %s annotations before dedupe: %s", len(annotations), summarize_annotations(annotations))
     deduped_annotations = dedupe_annotations(annotations)
     logger.info(
@@ -1225,12 +1237,46 @@ def annotate_chunks(
         len(annotations) - len(deduped_annotations),
         summarize_annotations(deduped_annotations),
     )
-    validated_annotations = validate_annotations(client, model_name, deduped_annotations, page_sources, annotation_style=annotation_style)
-    logger.info(
-        "After LLM validation: %s annotations remain: %s",
-        len(validated_annotations),
-        summarize_annotations(validated_annotations),
-    )
+    if annotation_pathway == "validated":
+        write_progress(
+            job_id,
+            {
+                "status": "running",
+                "stage": "validating",
+                "message": "Validating annotations...",
+                "currentChunk": len(chunks),
+                "totalChunks": len(chunks),
+            },
+        )
+        validated_annotations = validate_annotations(
+            client,
+            model_name,
+            deduped_annotations,
+            page_sources,
+            annotation_style=annotation_style,
+        )
+        logger.info(
+            "After LLM validation: %s annotations remain: %s",
+            len(validated_annotations),
+            summarize_annotations(validated_annotations),
+        )
+    else:
+        write_progress(
+            job_id,
+            {
+                "status": "running",
+                "stage": "finalizing",
+                "message": "Finalizing annotations...",
+                "currentChunk": len(chunks),
+                "totalChunks": len(chunks),
+            },
+        )
+        validated_annotations = deduped_annotations
+        logger.info(
+            "Skipping LLM validation for direct pathway; %s deduped annotations moving to local cleanup: %s",
+            len(validated_annotations),
+            summarize_annotations(validated_annotations),
+        )
     final_annotations = locally_validate_annotations(validated_annotations, page_sources)
     final_annotations = assign_text_anchors(final_annotations, page_sources, blocks)
     final_annotations = refine_annotation_bboxes(final_annotations, pdf_doc)

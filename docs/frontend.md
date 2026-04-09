@@ -19,11 +19,11 @@
 
 ## Current UI Structure
 - `app/page.tsx` is the server entrypoint for the landing screen. It loads current user and recent papers, then renders `LandingShell`.
-- `LandingShell` is the main marketing plus ingestion screen. It owns arXiv submission, progress polling, annotation style selection, and library navigation.
+- `LandingShell` is the main marketing plus ingestion screen. It owns arXiv submission, progress polling, annotation style/pathway selection, and library navigation.
 - `AuthPanel` owns sign-in, sign-up, password reset, and sign-out entrypoints using the browser Supabase client.
 - `app/paper/[paperId]/page.tsx` is a server page that loads a `PaperWorkspace` and passes it into `AnnotationWorkspace`.
 - `AnnotationWorkspace` is the top-level client shell for the paper screen and toggles the chat panel.
-- `PdfWorkspace` owns PDF rendering, overlay rendering, summary display, reprocess polling, reprocess style selection, and annotation popup behavior.
+- `PdfWorkspace` owns PDF rendering, overlay rendering, summary display, reprocess polling, reprocess style/pathway selection, and annotation popup behavior.
 - `ChatPanel` owns the collapsible inquiry panel and streams responses from `/api/chat`.
 - Assistant responses in the inquiry panel render markdown and LaTeX via the shared rich-text renderer, while preserving the paper-scoped streaming chat flow.
 
@@ -53,6 +53,7 @@
 - Chat UX changes usually touch `components/workspace/chat-panel.tsx` and may require matching API or contract updates.
 - If a UI change needs new data, update the server loader and `PaperWorkspace` contract first, then the client components.
 - Annotation style dropdown changes: the landing shell owns the ingest-time dropdown; `PdfWorkspace` owns the reprocess-time dropdown. Both read from and write to local `AnnotationStyle` state before passing the value to `runPythonIngest` / `runPythonReprocess` in `lib/python-service.ts`. The reprocess dropdown initializes from `workspace.paper.annotationStyle`.
+- Annotation pathway controls are local UI state on both screens. The landing and reprocess controls use explicit `Style:` and `Pathway:` labels, default to the `direct` backend pathway, label `direct` as `Instant`, and label `validated` as `Thinking`. They pass `AnnotationPathway` into `runPythonIngest` / `runPythonReprocess` and are intentionally not persisted on the paper record.
 
 ## Verification
 - `npm run lint`

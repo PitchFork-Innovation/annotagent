@@ -1,5 +1,6 @@
 export type AnnotationType = "highlight" | "note" | "definition";
 export type AnnotationStyle = "default" | "novice" | "expert";
+export type AnnotationPathway = "validated" | "direct";
 
 export type HighlightFragment = {
   x: number;
