@@ -2587,8 +2587,19 @@ def write_progress_to_file(job_id: str, serialized_payload: str) -> None:
     progress_path.write_text(serialized_payload, encoding="utf-8")
 
 
-def read_progress_from_kv(job_id: str) -> dict | None:
+def has_real_kv_rest_config() -> bool:
     if not KV_REST_API_URL or not KV_REST_API_TOKEN:
+        return False
+
+    normalized_token = KV_REST_API_TOKEN.strip().lower()
+    if not normalized_token or normalized_token in {"placeholder", "your-kv-token"}:
+        return False
+
+    return True
+
+
+def read_progress_from_kv(job_id: str) -> dict | None:
+    if not has_real_kv_rest_config():
         return None
 
     try:
@@ -2610,7 +2621,7 @@ def read_progress_from_kv(job_id: str) -> dict | None:
 
 
 def write_progress_to_kv(job_id: str, serialized_payload: str) -> None:
-    if not KV_REST_API_URL or not KV_REST_API_TOKEN:
+    if not has_real_kv_rest_config():
         return
 
     try:
