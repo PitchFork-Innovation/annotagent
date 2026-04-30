@@ -102,6 +102,8 @@ Required variables:
 | `KV_REST_API_TOKEN` | *(Optional)* Vercel KV token shared by Vercel and the Python service |
 | `PROGRESS_TTL_SECONDS` | *(Optional)* TTL for stored ingest progress updates |
 
+Local development can leave the KV variables unset. If you keep placeholder values in `.env.local`, the app now ignores them and falls back to local temp-file progress plus in-memory/no-op KV behavior.
+
 ### Frontend
 
 ```bash

@@ -64,3 +64,21 @@
 - `docs/ai-contracts.md`: model usage, prompts, and output contracts
 - `docs/development-workflows.md`: execution and verification playbook
 - `docs/agent-playbooks.md`: task-oriented lookup paths for common changes
+
+
+<claude-mem-context>
+# Memory Context
+
+# [annotagent] recent context, 2026-04-27 11:01am PDT
+
+Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
+Format: ID TIME TYPE TITLE
+Fetch details: get_observations([IDs]) | Search: mem-search skill
+
+Stats: 1 obs (487t read) | 1,496t work | 67% savings
+
+### Apr 27, 2026
+163 11:01a 🔵 Annotagent System Architecture Mapped
+
+Access 1k tokens of past work via get_observations([IDs]) or mem-search skill.
+</claude-mem-context>

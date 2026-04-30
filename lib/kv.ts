@@ -1,8 +1,22 @@
 import type { ChatMessage } from "./types";
 import { env } from "./env";
 
-export async function getChatHistory(paperId: string): Promise<ChatMessage[]> {
+function hasRealKvRestConfig() {
   if (!env.KV_REST_API_URL || !env.KV_REST_API_TOKEN) {
+    return false;
+  }
+
+  const token = env.KV_REST_API_TOKEN.trim().toLowerCase();
+
+  if (!token || token === "placeholder" || token === "your-kv-token") {
+    return false;
+  }
+
+  return true;
+}
+
+export async function getChatHistory(paperId: string): Promise<ChatMessage[]> {
+  if (!hasRealKvRestConfig()) {
     return [];
   }
 
@@ -26,7 +40,7 @@ export async function getChatHistory(paperId: string): Promise<ChatMessage[]> {
 }
 
 export async function setChatHistory(paperId: string, messages: ChatMessage[]) {
-  if (!env.KV_REST_API_URL || !env.KV_REST_API_TOKEN) {
+  if (!hasRealKvRestConfig()) {
     return;
   }
 
