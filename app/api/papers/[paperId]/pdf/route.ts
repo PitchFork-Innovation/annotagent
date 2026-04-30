@@ -13,11 +13,15 @@ type LinkedPaperRow = {
   paper:
     | {
         pdf_url: string;
-        arxiv_id: string;
+        arxiv_id: string | null;
+        source: string | null;
+        storage_path: string | null;
       }
     | Array<{
         pdf_url: string;
-        arxiv_id: string;
+        arxiv_id: string | null;
+        source: string | null;
+        storage_path: string | null;
       }>
     | null;
 };
@@ -35,7 +39,7 @@ export async function GET(_request: NextRequest, { params }: Props) {
 
   const { data: linkedPaper } = await supabase
     .from("user_papers")
-    .select("paper:papers(pdf_url, arxiv_id)")
+    .select("paper:papers(pdf_url, arxiv_id, source, storage_path)")
     .eq("user_id", user.id)
     .eq("paper_id", paperId)
     .maybeSingle();
@@ -46,7 +50,7 @@ export async function GET(_request: NextRequest, { params }: Props) {
   }
 
   try {
-    const cachedPdf = await fetchCachedPdf(paper.arxiv_id);
+    const cachedPdf = await fetchCachedPdf(paper);
     if (cachedPdf) {
       return new NextResponse(cachedPdf.bytes, {
         headers: {
@@ -54,6 +58,10 @@ export async function GET(_request: NextRequest, { params }: Props) {
           "Cache-Control": "private, max-age=3600"
         }
       });
+    }
+
+    if (paper.source === "upload") {
+      return NextResponse.json({ error: "Uploaded PDF is missing from storage." }, { status: 404 });
     }
 
     const upstream = await fetchPdfFromCandidates(buildPdfCandidates(paper.pdf_url, paper.arxiv_id));
@@ -80,9 +88,20 @@ function normalizeLinkedPaper(paper: LinkedPaperRow["paper"] | undefined) {
   return paper;
 }
 
-async function fetchCachedPdf(arxivId: string) {
+async function fetchCachedPdf(paper: {
+  arxiv_id: string | null;
+  source: string | null;
+  storage_path: string | null;
+}) {
   const admin = createSupabaseAdminClient();
-  const { data, error } = await admin.storage.from(env.SUPABASE_STORAGE_BUCKET).download(`arxiv/${arxivId}.pdf`);
+  const objectPath =
+    paper.source === "upload" ? paper.storage_path : paper.arxiv_id ? `arxiv/${paper.arxiv_id}.pdf` : null;
+
+  if (!objectPath) {
+    return null;
+  }
+
+  const { data, error } = await admin.storage.from(env.SUPABASE_STORAGE_BUCKET).download(objectPath);
 
   if (error || !data) {
     return null;
@@ -127,7 +146,7 @@ async function fetchPdfFromCandidates(candidates: string[]) {
   throw new Error(failures.join(" | ") || "Unable to fetch PDF.");
 }
 
-function buildPdfCandidates(sourceUrl: string, arxivId?: string) {
+function buildPdfCandidates(sourceUrl: string, arxivId?: string | null) {
   const candidates = new Set<string>();
   const normalizedSource = sourceUrl.replace(/^http:\/\//i, "https://");
 

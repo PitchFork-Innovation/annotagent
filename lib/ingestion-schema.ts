@@ -27,15 +27,45 @@ const annotationSchema = z.object({
   anchor: textAnchorSchema.nullish()
 });
 
-export const ingestionPayloadSchema = z.object({
-  arxivId: z.string().min(4),
-  title: z.string().min(1),
-  abstract: z.string(),
-  summary: z.string(),
-  pdfUrl: z.string().url(),
-  fullText: z.string().min(1),
-  pageCount: z.number().int().positive(),
-  starterQuestions: z.array(z.string()),
-  annotationStyle: z.enum(["default", "novice", "expert"]).optional().default("default"),
-  annotations: z.array(annotationSchema)
-});
+export const ingestionPayloadSchema = z
+  .object({
+    source: z.enum(["arxiv", "upload"]).default("arxiv"),
+    arxivId: z
+      .string()
+      .min(4)
+      .nullish()
+      .transform((value) => value ?? null),
+    originalFilename: z
+      .string()
+      .nullish()
+      .transform((value) => value ?? null),
+    storagePath: z
+      .string()
+      .nullish()
+      .transform((value) => value ?? null),
+    title: z.string().min(1),
+    abstract: z.string(),
+    summary: z.string(),
+    pdfUrl: z.string().min(1),
+    fullText: z.string().min(1),
+    pageCount: z.number().int().positive(),
+    starterQuestions: z.array(z.string()),
+    annotationStyle: z.enum(["default", "novice", "expert"]).optional().default("default"),
+    annotations: z.array(annotationSchema)
+  })
+  .superRefine((value, ctx) => {
+    if (value.source === "arxiv" && !value.arxivId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["arxivId"],
+        message: "arxivId is required when source is 'arxiv'."
+      });
+    }
+    if (value.source === "upload" && !value.storagePath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["storagePath"],
+        message: "storagePath is required when source is 'upload'."
+      });
+    }
+  });

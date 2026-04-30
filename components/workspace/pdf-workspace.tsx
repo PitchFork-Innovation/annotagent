@@ -125,10 +125,21 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
         }
       }, 1000);
 
+      const resolvedPaper = authorization.paper ?? {
+        id: workspace.paper.id,
+        source: workspace.paper.source,
+        arxivId: workspace.paper.arxivId,
+        originalFilename: workspace.paper.originalFilename,
+        title: workspace.paper.title,
+        abstract: workspace.paper.abstract,
+        pdfUrl: workspace.paper.pdfUrl,
+        storagePath: null
+      };
+
       const payload = await runPythonReprocess(
         authorization.pythonServiceUrl,
         authorization.token,
-        workspace.paper,
+        resolvedPaper,
         jobId,
         reprocessStyle,
         reprocessPathway
@@ -186,7 +197,9 @@ export function PdfWorkspace({ workspace, onToggleChat }: Props) {
               ← Library
             </button>
             <span className="font-mono text-[10px] uppercase tracking-[0.4em] text-smoke">
-              {workspace.paper.arxivId}
+              {workspace.paper.source === "upload"
+                ? workspace.paper.originalFilename ?? "Uploaded PDF"
+                : workspace.paper.arxivId}
             </span>
           </div>
 
