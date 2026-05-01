@@ -30,6 +30,20 @@ alter table papers add column if not exists ai_summary text;
 alter table papers add column if not exists annotation_style text not null default 'default';
 alter table annotations add column if not exists anchor jsonb;
 
+-- PDF upload support: introduce a source enum, allow null arxiv_id for uploads,
+-- and switch the global arxiv uniqueness to a partial index that only applies
+-- to arxiv-sourced rows.
+alter table papers add column if not exists source text not null default 'arxiv';
+alter table papers add column if not exists original_filename text;
+alter table papers add column if not exists storage_path text;
+alter table papers drop constraint if exists papers_source_check;
+alter table papers add constraint papers_source_check check (source in ('arxiv', 'upload'));
+alter table papers alter column arxiv_id drop not null;
+alter table papers drop constraint if exists papers_arxiv_id_key;
+create unique index if not exists papers_arxiv_id_unique
+  on papers (arxiv_id)
+  where source = 'arxiv';
+
 create table if not exists user_papers (
   user_id uuid not null references auth.users(id) on delete cascade,
   paper_id uuid not null references papers(id) on delete cascade,

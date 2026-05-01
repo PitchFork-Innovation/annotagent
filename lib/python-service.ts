@@ -6,6 +6,11 @@ type AuthorizationResponse = {
   token: string;
 };
 
+type UploadAuthorizationResponse = AuthorizationResponse & {
+  storagePath: string;
+  signedDownloadUrl: string;
+};
+
 type ProgressPayload = {
   status?: "pending" | "running" | "completed" | "failed";
   stage?: string;
@@ -45,6 +50,18 @@ export async function authorizePythonIngest(jobId: string) {
   return readJsonResponse<AuthorizationResponse & { error?: string }>(response);
 }
 
+export async function authorizePythonUpload(jobId: string, uploadId: string) {
+  const response = await fetch("/api/upload/authorize", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ jobId, uploadId })
+  });
+
+  return readJsonResponse<UploadAuthorizationResponse & { error?: string }>(response);
+}
+
 export async function authorizePythonReprocess(paperId: string, jobId: string) {
   const response = await fetch(`/api/papers/${paperId}/reprocess/authorize`, {
     method: "POST",
@@ -54,7 +71,15 @@ export async function authorizePythonReprocess(paperId: string, jobId: string) {
     body: JSON.stringify({ jobId })
   });
 
-  return readJsonResponse<AuthorizationResponse & { error?: string }>(response);
+  return readJsonResponse<
+    AuthorizationResponse & {
+      error?: string;
+      paper?: Pick<PaperRecord, "id" | "source" | "arxivId" | "originalFilename" | "title" | "abstract"> & {
+        pdfUrl: string;
+        storagePath: string | null;
+      };
+    }
+  >(response);
 }
 
 export async function fetchPythonProgress(jobId: string, action: PythonProgressAction = "ingest") {
@@ -103,10 +128,46 @@ export async function runPythonIngest(
   return payload;
 }
 
+export async function runPythonUploadIngest(
+  baseUrl: string,
+  token: string,
+  args: {
+    storagePath: string;
+    signedDownloadUrl: string;
+    originalFilename: string;
+    jobId: string;
+    annotationStyle?: AnnotationStyle;
+    annotationPathway?: AnnotationPathway;
+  }
+) {
+  const response = await fetch(buildPythonUrl(baseUrl, "/ingest/upload"), {
+    method: "POST",
+    headers: buildAuthHeaders(token),
+    body: JSON.stringify({
+      storage_path: args.storagePath,
+      pdf_url: args.signedDownloadUrl,
+      original_filename: args.originalFilename,
+      job_id: args.jobId,
+      annotation_style: args.annotationStyle ?? "default",
+      annotation_pathway: args.annotationPathway ?? "validated"
+    })
+  });
+
+  const payload = await readJsonResponse<IngestionPayload & { detail?: string }>(response);
+
+  if (!response.ok) {
+    throw new Error(payload.detail ?? "Python upload ingestion failed.");
+  }
+
+  return payload;
+}
+
 export async function runPythonReprocess(
   baseUrl: string,
   token: string,
-  paper: Pick<PaperRecord, "arxivId" | "title" | "abstract" | "pdfUrl">,
+  paper: Pick<PaperRecord, "id" | "source" | "arxivId" | "originalFilename" | "title" | "abstract" | "pdfUrl"> & {
+    storagePath?: string | null;
+  },
   jobId: string,
   annotationStyle: AnnotationStyle = "default",
   annotationPathway: AnnotationPathway = "validated"
@@ -115,7 +176,11 @@ export async function runPythonReprocess(
     method: "POST",
     headers: buildAuthHeaders(token),
     body: JSON.stringify({
+      paper_id: paper.id,
+      source: paper.source,
       arxiv_id: paper.arxivId,
+      original_filename: paper.originalFilename,
+      storage_path: paper.storagePath ?? null,
       title: paper.title,
       abstract: paper.abstract,
       pdf_url: paper.pdfUrl,

@@ -569,8 +569,21 @@ class IngestRequest(BaseModel):
     annotation_pathway: Literal["validated", "direct"] = "validated"
 
 
+class IngestUploadRequest(BaseModel):
+    storage_path: str = Field(min_length=1)
+    pdf_url: str = Field(min_length=1)
+    original_filename: str = Field(min_length=1)
+    job_id: str | None = None
+    annotation_style: Literal["default", "novice", "expert"] = "default"
+    annotation_pathway: Literal["validated", "direct"] = "validated"
+
+
 class ReprocessRequest(BaseModel):
-    arxiv_id: str = Field(min_length=4)
+    paper_id: str = Field(min_length=1)
+    source: Literal["arxiv", "upload"] = "arxiv"
+    arxiv_id: str | None = None
+    original_filename: str | None = None
+    storage_path: str | None = None
     title: str = Field(min_length=1)
     abstract: str = ""
     pdf_url: str = Field(min_length=1)
@@ -636,7 +649,10 @@ class RollingMemoryState(BaseModel):
 
 
 class IngestResponse(BaseModel):
-    arxivId: str
+    source: Literal["arxiv", "upload"] = "arxiv"
+    arxivId: str | None = None
+    originalFilename: str | None = None
+    storagePath: str | None = None
     title: str
     abstract: str
     summary: str
@@ -710,7 +726,10 @@ async def ingest(request: IngestRequest, http_request: Request) -> IngestRespons
     paper = await asyncio.to_thread(resolve_arxiv_paper, normalized_arxiv_id)
 
     return await run_annotation_pipeline(
+        source="arxiv",
         arxiv_id=normalized_arxiv_id,
+        original_filename=None,
+        storage_path=None,
         title=paper.title,
         abstract=paper.summary,
         pdf_url=paper.pdf_url,
@@ -722,25 +741,84 @@ async def ingest(request: IngestRequest, http_request: Request) -> IngestRespons
     )
 
 
+@app.post("/ingest/upload", response_model=IngestResponse)
+async def ingest_upload(request: IngestUploadRequest, http_request: Request) -> IngestResponse:
+    if not request.job_id:
+        raise HTTPException(status_code=400, detail="job_id is required.")
+
+    authorize_python_service_request(http_request, "ingest", request.job_id)
+    write_progress(
+        request.job_id,
+        {"status": "running", "stage": "fetching_pdf", "message": "Fetching uploaded PDF..."},
+    )
+    logger.info(
+        "Starting upload ingest for storage_path=%s filename=%s",
+        request.storage_path,
+        request.original_filename,
+    )
+
+    pdf_bytes = await fetch_pdf_bytes_from_signed_url(request.pdf_url)
+    validate_uploaded_pdf_bytes(pdf_bytes)
+
+    write_progress(
+        request.job_id,
+        {"status": "running", "stage": "extracting_metadata", "message": "Extracting title and abstract..."},
+    )
+    metadata = await asyncio.to_thread(extract_upload_metadata, pdf_bytes, request.original_filename)
+
+    upload_token = compute_upload_token(request.storage_path)
+
+    return await asyncio.to_thread(
+        run_annotation_pipeline_blocking,
+        source="upload",
+        arxiv_id=upload_token,
+        original_filename=request.original_filename,
+        storage_path=request.storage_path,
+        title=metadata["title"],
+        abstract=metadata["abstract"],
+        pdf_url=request.pdf_url,
+        pdf_bytes=pdf_bytes,
+        job_id=request.job_id,
+        annotation_style=request.annotation_style,
+        annotation_pathway=request.annotation_pathway,
+    )
+
+
 @app.post("/reprocess", response_model=IngestResponse)
 async def reprocess(request: ReprocessRequest, http_request: Request) -> IngestResponse:
     if not request.job_id:
         raise HTTPException(status_code=400, detail="job_id is required.")
 
     authorize_python_service_request(http_request, "reprocess", request.job_id)
-    normalized_arxiv_id = normalize_arxiv_id(request.arxiv_id)
-    logger.info("Starting annotation reprocess for arXiv ID %s", normalized_arxiv_id)
+    arxiv_id_for_pipeline: str | None = None
+    if request.source == "arxiv":
+        if not request.arxiv_id:
+            raise HTTPException(status_code=400, detail="arxiv_id is required for arxiv reprocess.")
+        arxiv_id_for_pipeline = normalize_arxiv_id(request.arxiv_id)
+        logger.info("Starting reprocess for arXiv paper %s (paper_id=%s)", arxiv_id_for_pipeline, request.paper_id)
+        pdf_progress_message = "Fetching cached PDF..."
+        pdf_source_label = "cached storage"
+    else:
+        if not request.storage_path:
+            raise HTTPException(status_code=400, detail="storage_path is required for upload reprocess.")
+        arxiv_id_for_pipeline = compute_upload_token(request.storage_path)
+        logger.info("Starting reprocess for upload paper %s (paper_id=%s)", request.storage_path, request.paper_id)
+        pdf_progress_message = "Fetching uploaded PDF..."
+        pdf_source_label = "uploaded storage"
 
     return await run_annotation_pipeline(
-        arxiv_id=normalized_arxiv_id,
+        source=request.source,
+        arxiv_id=arxiv_id_for_pipeline,
+        original_filename=request.original_filename,
+        storage_path=request.storage_path,
         title=request.title,
         abstract=request.abstract,
         pdf_url=request.pdf_url,
         job_id=request.job_id,
         annotation_style=request.annotation_style,
         annotation_pathway=request.annotation_pathway,
-        pdf_progress_message="Fetching cached PDF...",
-        pdf_source_label="cached storage",
+        pdf_progress_message=pdf_progress_message,
+        pdf_source_label=pdf_source_label,
     )
 
 
@@ -915,9 +993,155 @@ async def fetch_pdf_bytes_with_fallback(source_url: str, arxiv_id: str) -> bytes
     raise HTTPException(status_code=502, detail=failures[0] if failures else "Unable to fetch PDF.")
 
 
+UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+UPLOAD_MIN_TEXT_CHARS = 500
+UPLOAD_METADATA_FIRST_PAGE_CHAR_LIMIT = 6000
+
+
+async def fetch_pdf_bytes_from_signed_url(signed_url: str) -> bytes:
+    async with httpx.AsyncClient(
+        timeout=60.0,
+        follow_redirects=True,
+        headers={"Accept": "application/pdf", "User-Agent": "AnnotAgent/1.0"},
+    ) as client:
+        try:
+            response = await client.get(signed_url)
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise HTTPException(status_code=502, detail=f"Unable to fetch uploaded PDF: {error}") from error
+
+    return response.content
+
+
+def validate_uploaded_pdf_bytes(pdf_bytes: bytes) -> None:
+    if len(pdf_bytes) > UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="PDF must be 25 MB or smaller.")
+
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF.")
+
+    try:
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as error:  # pragma: no cover - PyMuPDF raises broad errors
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF.") from error
+
+    try:
+        total_chars = 0
+        for page_index in range(pdf_doc.page_count):
+            page = pdf_doc.load_page(page_index)
+            total_chars += len(page.get_text("text") or "")
+            if total_chars >= UPLOAD_MIN_TEXT_CHARS:
+                return
+    finally:
+        pdf_doc.close()
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "This PDF appears to be a scanned image. "
+            "OCR isn't supported yet — try a PDF with selectable text."
+        ),
+    )
+
+
+def extract_first_page_text(pdf_bytes: bytes) -> str:
+    pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if pdf_doc.page_count == 0:
+            return ""
+        page = pdf_doc.load_page(0)
+        return (page.get_text("text") or "").strip()
+    finally:
+        pdf_doc.close()
+
+
+UPLOAD_METADATA_PROMPT = """
+You extract bibliographic metadata from the first page of an academic PDF.
+
+Return ONLY a single JSON object with this schema (no prose, no fences):
+{ "title": string, "abstract": string }
+
+Rules:
+- title is the paper's full title as printed on the page (no trailing periods)
+- abstract is the paper's abstract or, if there is no labeled abstract, the first paragraph that summarizes the paper
+- never invent content; if a field cannot be determined, return an empty string for that field
+- do not include author lists, affiliations, or section markers
+""".strip()
+
+
+def extract_upload_metadata(pdf_bytes: bytes, original_filename: str) -> dict[str, str]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing for metadata extraction.")
+
+    first_page_text = extract_first_page_text(pdf_bytes)
+    if not first_page_text:
+        logger.error("Upload metadata extraction aborted: empty first-page text for %s", original_filename)
+        raise HTTPException(status_code=400, detail="Couldn't read this PDF.")
+
+    snippet = first_page_text[:UPLOAD_METADATA_FIRST_PAGE_CHAR_LIMIT]
+    client = OpenAI(api_key=api_key, timeout=ANNOTATION_REQUEST_TIMEOUT)
+    last_error: str | None = None
+
+    for attempt in range(1, 3):
+        try:
+            response = client.chat.completions.create(
+                model=ANNOTATION_MODELS[0],
+                max_completion_tokens=600,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": UPLOAD_METADATA_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Filename: {original_filename}\n\n"
+                            f"First page text:\n{snippet}"
+                        ),
+                    },
+                ],
+            )
+            content = extract_text_content(response)
+            parsed = json.loads(content)
+            title = (parsed.get("title") or "").strip()
+            abstract = (parsed.get("abstract") or "").strip()
+            if title:
+                logger.info(
+                    "Upload metadata extracted for %s on attempt %s (title_len=%s, abstract_len=%s)",
+                    original_filename,
+                    attempt,
+                    len(title),
+                    len(abstract),
+                )
+                return {"title": title, "abstract": abstract}
+            last_error = "Empty title in extracted metadata."
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as error:
+            last_error = f"Unparseable metadata response: {error}"
+        except Exception as error:  # pragma: no cover - OpenAI client errors
+            last_error = f"OpenAI metadata call failed: {error}"
+
+        logger.warning(
+            "Upload metadata extraction attempt %s/2 failed for %s: %s",
+            attempt,
+            original_filename,
+            last_error,
+        )
+
+    logger.error("Upload metadata extraction hard-failed for %s: %s", original_filename, last_error)
+    raise HTTPException(status_code=422, detail="Couldn't read this PDF.")
+
+
+def compute_upload_token(storage_path: str) -> str:
+    digest = hashlib.sha256(storage_path.encode("utf-8")).hexdigest()
+    return f"upload-{digest[:16]}"
+
+
 async def run_annotation_pipeline(
     *,
-    arxiv_id: str,
+    source: Literal["arxiv", "upload"] = "arxiv",
+    arxiv_id: str | None,
+    original_filename: str | None,
+    storage_path: str | None,
     title: str,
     abstract: str,
     pdf_url: str,
@@ -928,12 +1152,20 @@ async def run_annotation_pipeline(
     pdf_source_label: str,
 ) -> IngestResponse:
     write_progress(job_id, {"status": "running", "stage": "fetching_pdf", "message": pdf_progress_message})
-    logger.info("Fetching PDF bytes from %s for %s", pdf_source_label, arxiv_id)
-    pdf_bytes = await fetch_pdf_bytes_with_fallback(pdf_url, arxiv_id)
+    logger.info("Fetching PDF bytes from %s for %s", pdf_source_label, arxiv_id or storage_path or "<unknown>")
+
+    if source == "upload":
+        pdf_bytes = await fetch_pdf_bytes_from_signed_url(pdf_url)
+        validate_uploaded_pdf_bytes(pdf_bytes)
+    else:
+        pdf_bytes = await fetch_pdf_bytes_with_fallback(pdf_url, arxiv_id or "")
 
     return await asyncio.to_thread(
         run_annotation_pipeline_blocking,
+        source=source,
         arxiv_id=arxiv_id,
+        original_filename=original_filename,
+        storage_path=storage_path,
         title=title,
         abstract=abstract,
         pdf_url=pdf_url,
@@ -946,7 +1178,10 @@ async def run_annotation_pipeline(
 
 def run_annotation_pipeline_blocking(
     *,
-    arxiv_id: str,
+    source: Literal["arxiv", "upload"] = "arxiv",
+    arxiv_id: str | None,
+    original_filename: str | None,
+    storage_path: str | None,
     title: str,
     abstract: str,
     pdf_url: str,
@@ -956,7 +1191,8 @@ def run_annotation_pipeline_blocking(
     annotation_pathway: str = "validated",
 ) -> IngestResponse:
     write_progress(job_id, {"status": "running", "stage": "opening_pdf", "message": "Opening PDF for text extraction..."})
-    logger.info("Opening PDF with PyMuPDF for %s", arxiv_id)
+    pipeline_label = arxiv_id or storage_path or "<unknown>"
+    logger.info("Opening PDF with PyMuPDF for %s", pipeline_label)
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     try:
@@ -1019,7 +1255,10 @@ def run_annotation_pipeline_blocking(
         )
 
         return IngestResponse(
-            arxivId=arxiv_id,
+            source=source,
+            arxivId=arxiv_id if source == "arxiv" else None,
+            originalFilename=original_filename,
+            storagePath=storage_path,
             title=title,
             abstract=abstract,
             summary=summary,

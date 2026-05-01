@@ -1,6 +1,7 @@
 export type AnnotationType = "highlight" | "note" | "definition";
 export type AnnotationStyle = "default" | "novice" | "expert";
 export type AnnotationPathway = "validated" | "direct";
+export type PaperSource = "arxiv" | "upload";
 
 export type HighlightFragment = {
   x: number;
@@ -39,7 +40,9 @@ export type AnnotationRecord = {
 
 export type PaperRecord = {
   id: string;
-  arxivId: string;
+  source: PaperSource;
+  arxivId: string | null;
+  originalFilename: string | null;
   title: string;
   abstract: string;
   aiSummary: string | null;
@@ -63,7 +66,9 @@ export type PaperWorkspace = {
 
 export type PaperListItem = {
   id: string;
-  arxivId: string;
+  source: PaperSource;
+  arxivId: string | null;
+  originalFilename: string | null;
   title: string;
   abstract: string;
   annotationCount: number;
@@ -75,7 +80,10 @@ export type UserProfile = {
 };
 
 export type IngestionPayload = {
-  arxivId: string;
+  source: PaperSource;
+  arxivId: string | null;
+  originalFilename: string | null;
+  storagePath: string | null;
   title: string;
   abstract: string;
   summary: string;
@@ -93,4 +101,11 @@ export type IngestionPayload = {
     bbox: BoundingBox;
     anchor?: TextAnchorPayload | null;
   }>;
+};
+
+export type UploadInitResponse = {
+  uploadId: string;
+  storagePath: string;
+  signedUploadUrl: string;
+  signedUploadToken: string;
 };
