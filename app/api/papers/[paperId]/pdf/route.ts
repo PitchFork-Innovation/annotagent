@@ -101,7 +101,7 @@ async function fetchCachedPdf(paper: {
     return null;
   }
 
-  const { data, error } = await admin.storage.from(env.SUPABASE_STORAGE_BUCKET).download(objectPath);
+  const { data, error } = await admin.storage.from(env.S3_BUCKET).download(objectPath);
 
   if (error || !data) {
     return null;

@@ -71,7 +71,7 @@ export async function POST(request: NextRequest, { params }: Props) {
     }
     const admin = createSupabaseAdminClient();
     const { data, error } = await admin.storage
-      .from(env.SUPABASE_STORAGE_BUCKET)
+      .from(env.S3_BUCKET)
       .createSignedUrl(paper.storage_path, SIGNED_URL_TTL_SECONDS);
 
     if (error || !data?.signedUrl) {

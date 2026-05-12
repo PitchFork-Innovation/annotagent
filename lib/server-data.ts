@@ -377,7 +377,7 @@ export async function removePaperFromLibrary(paperId: string, userId: string) {
   await admin.from("papers").delete().eq("id", paper.id);
 
   if (paper.storage_path) {
-    await admin.storage.from(env.SUPABASE_STORAGE_BUCKET).remove([paper.storage_path]);
+    await admin.storage.from(env.S3_BUCKET).remove([paper.storage_path]);
   }
 
   return { source };
@@ -397,7 +397,7 @@ export async function createUploadSlot(userId: string, declaredSize: number) {
   const storagePath = `user-uploads/${userId}/${uploadId}.pdf`;
 
   const { data, error } = await admin.storage
-    .from(env.SUPABASE_STORAGE_BUCKET)
+    .from(env.S3_BUCKET)
     .createSignedUploadUrl(storagePath);
 
   if (error || !data) {
@@ -416,7 +416,7 @@ export async function createUploadDownloadUrl(userId: string, uploadId: string) 
   const admin = createSupabaseAdminClient();
   const storagePath = `user-uploads/${userId}/${uploadId}.pdf`;
   const { data, error } = await admin.storage
-    .from(env.SUPABASE_STORAGE_BUCKET)
+    .from(env.S3_BUCKET)
     .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
 
   if (error || !data?.signedUrl) {
@@ -573,13 +573,13 @@ function postJson(url: URL, body: string, timeoutMs: number, token?: string): Pr
 
 async function cachePaperPdf(admin: ReturnType<typeof createSupabaseAdminClient>, arxivId: string, sourceUrl: string) {
   const objectPath = `arxiv/${arxivId}.pdf`;
-  const bucket = env.SUPABASE_STORAGE_BUCKET;
+  const bucket = env.S3_BUCKET;
 
   const { data: existing } = await admin.storage.from(bucket).list("arxiv", {
     search: `${arxivId}.pdf`
   });
 
-  if (!existing?.some((file) => file.name === `${arxivId}.pdf`)) {
+  if (!existing?.some((file: { name: string }) => file.name === `${arxivId}.pdf`)) {
     try {
       const response = await fetch(sourceUrl);
       if (!response.ok) {
@@ -611,7 +611,7 @@ async function resolvePreferredPaperPdfUrl(
   storagePath: string | null,
   fallbackUrl: string
 ) {
-  const bucket = env.SUPABASE_STORAGE_BUCKET;
+  const bucket = env.S3_BUCKET;
 
   if (source === "upload") {
     if (!storagePath) {
@@ -633,7 +633,7 @@ async function resolvePreferredPaperPdfUrl(
     search: `${arxivId}.pdf`
   });
 
-  if (existing?.some((file) => file.name === `${arxivId}.pdf`)) {
+  if (existing?.some((file: { name: string }) => file.name === `${arxivId}.pdf`)) {
     const { data, error } = await admin.storage.from(bucket).createSignedUrl(objectPath, SIGNED_URL_TTL_SECONDS);
 
     if (error || !data?.signedUrl) {
