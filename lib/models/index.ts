@@ -66,7 +66,7 @@ const ChatSchema = new Schema(
   {
     _id: { type: String, default: () => randomUUID() },
     paperId: { type: String, required: true, unique: true },
-    userId: { type: String, required: true },
+    userId: { type: String, default: null },
     messages: { type: Schema.Types.Mixed, default: [] },
     expiresAt: { type: Date, required: true },
   },
