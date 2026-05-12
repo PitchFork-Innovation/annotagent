@@ -1,23 +1,43 @@
-import { cookies } from "next/headers";
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { env } from "@/lib/env";
+// MIGRATION STUB: Supabase removed. This file preserves the exported API shape
+// so callers continue to compile during the Supabase → MongoDB migration.
+// Replace call-sites incrementally in Phase 2+.
 
-export async function createSupabaseServerClient() {
-  const cookieStore = await cookies();
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-  return createServerClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookieValues: { name: string; value: string; options: CookieOptions }[]) {
-        try {
-          cookieValues.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
-        } catch {
-          // Server Components can read cookies but cannot always mutate them.
-          // Route handlers like /auth/callback can still persist auth cookies.
-        }
-      }
-    }
-  });
+function notImplemented(name: string): Promise<any> {
+  return Promise.reject(
+    new Error(`${name} is not implemented — Supabase has been removed. Migrate caller to MongoDB/NextAuth.`)
+  );
+}
+
+function makeDbStub(): any {
+  const chain: any = {
+    select: (..._args: any[]) => chain,
+    insert: (..._args: any[]) => chain,
+    update: (..._args: any[]) => chain,
+    upsert: (..._args: any[]) => chain,
+    delete: (..._args: any[]) => chain,
+    eq: (..._args: any[]) => chain,
+    neq: (..._args: any[]) => chain,
+    single: (..._args: any[]) => notImplemented("db.single"),
+    maybeSingle: (..._args: any[]) => notImplemented("db.maybeSingle"),
+    limit: (..._args: any[]) => chain,
+    order: (..._args: any[]) => chain,
+    then: undefined as any,
+  };
+  return chain;
+}
+
+export async function createSupabaseServerClient(): Promise<any> {
+  return {
+    auth: {
+      getUser: (..._args: any[]): Promise<any> =>
+        notImplemented("auth.getUser"),
+      signOut: (..._args: any[]): Promise<any> =>
+        notImplemented("auth.signOut"),
+      exchangeCodeForSession: (..._args: any[]): Promise<any> =>
+        notImplemented("auth.exchangeCodeForSession"),
+    },
+    from: (_table: string): any => makeDbStub(),
+  };
 }
