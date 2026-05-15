@@ -18,8 +18,9 @@
 - `app/api/papers/[paperId]/reprocess/apply/route.ts`
 - `lib/server-data.ts`
 - `lib/env.ts`
-- `lib/kv.ts`
-- `lib/supabase/*`
+- `lib/models/`
+- `lib/s3.ts`
+- `lib/mongodb.ts`
 
 ## Responsibility Split
 - Route handlers:
@@ -28,11 +29,11 @@
   - return HTTP status codes and response objects
 - `lib/server-data.ts`:
   - loads and shapes app data
-  - orchestrates Supabase reads and writes
-  - applies completed Python ingestion payloads to Supabase
-  - caches PDFs in storage
-  - persists and reads optional KV chat history
-  - handles fallback behavior like missing `ai_summary`
+  - orchestrates MongoDB reads and writes via Mongoose models
+  - applies completed Python ingestion payloads to MongoDB
+  - caches PDFs in S3
+  - persists and reads TTL-indexed chat history in MongoDB (`chats` collection)
+  - handles fallback behavior like missing `aiSummary`
 - The browser:
   - requests short-lived Python-service tokens from authenticated route handlers
   - calls the Python service directly for long-running ingest/reprocess jobs and progress polling
@@ -49,11 +50,11 @@
 - `/api/ingest/apply`
   - POST with a validated `IngestionPayload`
   - requires authenticated user
-  - saves the finished ingest result to Supabase
+  - saves the finished ingest result to MongoDB
 - `/api/papers/[paperId]`
   - GET paper workspace JSON
 - `/api/papers/[paperId]/pdf`
-  - GET proxied PDF bytes from cached Supabase storage when available, otherwise arXiv-based fallbacks
+  - GET proxied PDF bytes — redirects to an S3 presigned URL when a cached PDF is available, otherwise falls back to arXiv-direct
 - `/api/papers/[paperId]/reprocess`
   - POST with optional `jobId`
   - requires authenticated user and linked paper
@@ -64,22 +65,21 @@
 - `/api/papers/[paperId]/reprocess/apply`
   - POST with a validated `IngestionPayload`
   - requires authenticated user and linked paper
-  - saves the finished reprocess result to Supabase
+  - saves the finished reprocess result to MongoDB
 - `/api/chat`
   - POST with `paperId` and `messages`
   - loads paper context, streams completion, stores chat history on finish
 
-## Auth And Client Rules
-- Routes that mutate library state require a Supabase-authenticated user.
-- Long-running annotation generation now runs browser → Python service directly with short-lived HMAC tokens issued by authenticated route handlers.
-- `PYTHON_SERVICE_SHARED_SECRET` must match between Vercel and the Python service host.
-- `ensurePaperIngested` uses both server and admin clients:
-  - server client for user-scoped reads/writes like `user_papers`
-  - admin client for cross-user paper and annotation persistence plus storage access
-- `reprocessPaperAnnotations` first proves the current user owns the paper through `user_papers`.
-- Reprocess prefers the cached storage PDF when present, but should fall back to the paper's saved `pdf_url` if the cache object is missing so older papers can still be regenerated.
-- Chat history is optional. Missing KV env vars should not break chat responses.
-- Shared ingest progress on multi-instance Python deployments relies on optional shared Redis or KV REST config; without it, progress falls back to the Python host's local temp storage.
+## Auth And Authorization Rules
+- Routes that mutate library state require an authenticated NextAuth session (JWT).
+- Every server-data function that returns paper or annotation data takes a `userId` and calls `UserPaper.exists({ userId, paperId })` before returning. This is the application-layer replacement for Supabase RLS — there is no database-level row security.
+- Long-running annotation generation runs browser → Python service directly with short-lived HMAC tokens issued by authenticated route handlers.
+- `PYTHON_SERVICE_SHARED_SECRET` must match between the app host and the Python service host.
+- `ensurePaperIngested` performs the `userpapers` link check and MongoDB paper/annotation persistence in a single flow — there is no separate admin client; MongoDB Atlas does not use per-user DB credentials.
+- `reprocessPaperAnnotations` first proves the current user owns the paper through `UserPaper.exists`.
+- Reprocess prefers the cached S3 PDF when present, but falls back to the paper's saved `pdfUrl` so older papers can still be regenerated.
+- Chat history is stored in the `chats` MongoDB collection with a 24-hour TTL. A missing chat document is a normal state and must not break chat responses.
+- Shared ingest progress on multi-instance Python deployments relies on optional shared Redis; without it, progress falls back to the Python host's local temp storage.
 
 ## Coupled Contracts
 - `PaperWorkspace`, `PaperRecord`, `AnnotationRecord`, and `IngestionPayload` in `lib/types.ts` are the main TypeScript contracts.
@@ -92,8 +92,8 @@
   - `lib/server-data.ts`
   - affected route handlers
   - frontend consumers
-- If you change `papers` or `annotations` columns, inspect:
-  - `supabase/schema.sql`
+- If you change `papers` or `annotations` fields, inspect:
+  - the Mongoose model in `lib/models/`
   - `lib/server-data.ts`
   - workspace consumers
 
@@ -101,7 +101,7 @@
 - New route, existing business logic: keep the route thin and call a helper in `lib/server-data.ts`.
 - New data on the paper page: update the DB read in `getPaperWorkspace`, then `lib/types.ts`, then the UI.
 - New ingest-side payload field: update both the Python return shape and TypeScript `IngestionPayload`.
-- PDF retrieval changes must preserve authenticated paper access, the cached-storage-first lookup, and PDF content-type validation for network fallbacks.
+- PDF retrieval changes must preserve authenticated paper access, the cached S3-first lookup, and PDF content-type validation for network fallbacks.
 
 ## Verification
 - `npm run lint`

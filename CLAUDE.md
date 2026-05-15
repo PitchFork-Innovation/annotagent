@@ -25,16 +25,16 @@ python3 -m py_compile python_service/main.py # syntax check only
 **Three runtime layers:**
 
 1. **Next.js App Router** (`app/`, `components/`) — server pages load data and pass shaped objects to client components. Route handlers stay thin: validate, auth-check, delegate.
-2. **Server orchestration** (`lib/server-data.ts`) — owns all cross-service data flow: Supabase reads/writes, optional KV chat persistence, cached PDF access, calls to the Python service.
+2. **Server orchestration** (`lib/server-data.ts`) — owns all cross-service data flow: MongoDB reads/writes, S3 PDF storage, TTL-based chat persistence, calls to the Python service. Auth is handled by NextAuth.js v5 with a Credentials provider and JWT sessions.
 3. **Python ingestion service** (`python_service/main.py`) — FastAPI service that resolves arXiv metadata, fetches PDFs, extracts text/boxes with PyMuPDF, and generates annotations and summaries via OpenAI.
 
 **Key contracts:**
 - `lib/types.ts` — shared TypeScript types; `PaperWorkspace` is the main server-to-UI contract
 - `lib/ingestion-schema.ts` — Zod validation of Python service payloads at the apply routes
-- `supabase/schema.sql` — authoritative schema; papers deduplicated by `arxiv_id`, linked to users via `user_papers`
+- MongoDB collections (`papers`, `userpapers`, `chats`) in `lib/models/` — authoritative schema; papers deduplicated by `arxivId`, linked to users via `userpapers`
 - Python Pydantic models in `python_service/main.py` — annotation output contract
 
-**When a change crosses boundaries** (e.g., new field in annotations), update `supabase/schema.sql`, `lib/types.ts`, `lib/ingestion-schema.ts`, `lib/server-data.ts`, the relevant route handler, and Python models/prompts together.
+**When a change crosses boundaries** (e.g., new field in annotations), update the relevant Mongoose model in `lib/models/`, `lib/types.ts`, `lib/ingestion-schema.ts`, `lib/server-data.ts`, the relevant route handler, and Python models/prompts together.
 
 ## Verification Matrix
 
@@ -53,7 +53,7 @@ Start here before opening code files for subsystem work:
 - `docs/frontend.md` — App Router and workspace UI structure
 - `docs/api-server-data.md` — route handler and orchestration rules
 - `docs/python-ingestion.md` — FastAPI ingestion pipeline and annotation contract
-- `docs/data-model.md` — Supabase schema, storage, and persistence invariants
+- `docs/data-model.md` — MongoDB collections, S3 storage, and persistence invariants
 - `docs/ai-contracts.md` — model usage, prompts, and output contracts
 - `docs/development-workflows.md` — execution and verification playbook
 - `docs/agent-playbooks.md` — task-oriented lookup paths for common changes

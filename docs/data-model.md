@@ -4,58 +4,73 @@
 - Summarize the stored data shape and the persistence invariants agents must preserve across schema and app changes.
 
 ## When To Read This
-- Read before editing Supabase schema, storage behavior, record shapes, library ownership logic, or any change that adds/removes persisted fields.
+- Read before editing MongoDB models, S3 storage behavior, record shapes, library ownership logic, or any change that adds/removes persisted fields.
 
 ## Source Of Truth Code Areas
-- `supabase/schema.sql`
-- `supabase/storage.md`
+- `lib/models/` — Mongoose model definitions
 - `lib/types.ts`
 - `lib/server-data.ts`
-- `lib/kv.ts`
+- `lib/s3.ts`
 
-## Tables
-- `papers`
-  - one row per `arxiv_id`
-  - stores title, abstract, full text, PDF URL, page count, starter questions, optional `ai_summary`, and `annotation_style` (text, default `'default'`)
-  - `annotation_style` records which preset style (`default` | `novice` | `expert`) was used to generate the current annotations; updated on each reprocess
-- `annotations`
-  - child rows keyed by `paper_id`
-  - stores `page_number`, `type`, `text_ref`, `note`, `importance`, and JSON `bbox`
-  - `bbox` is a normalized page-space rectangle and may also carry finer-grained fragment rectangles for multi-fragment highlights
-  - optional JSON `anchor` stores deterministic page-text offsets plus occurrence index for repeated-term disambiguation
-- `user_papers`
-  - join table linking authenticated users to papers in their private library
-  - primary key is `(user_id, paper_id)`
+## MongoDB Collections
 
-## Storage And Non-Postgres Persistence
-- Supabase Storage bucket defaults to `papers`.
-- Cached PDFs are expected at `arxiv/<arxiv_id>.pdf`.
-- Chat history is not in Postgres; it is optional KV REST storage with a 24-hour TTL keyed by paper ID.
+### `papers`
+- One document per ingested paper.
+- Fields: `_id` (UUID string), `source` (`"arxiv"` | `"upload"`), `arxivId` (sparse, arxiv papers only), `originalFilename` (user-upload papers only), `storagePath`, `title`, `abstract`, `aiSummary`, `pdfUrl`, `pageCount`, `fullText`, `starterQuestions`, `annotationStyle` (`"default"` | `"novice"` | `"expert"`, default `"default"`), `annotations` (embedded array), `createdAt`, `updatedAt`.
+- `annotationStyle` records which preset style was used to generate the current annotations; updated on each reprocess.
+- Embedded `annotations` fields: `page_number`, `type`, `text_ref`, `note`, `importance`, `bbox` (normalized page-space rectangle, may include fragment rectangles), optional `anchor` (deterministic page-text offsets plus occurrence index).
+- Index: `arxivId` sparse unique (arXiv papers only).
 
-## Access Model
-- Row-level security is enabled on `papers`, `annotations`, and `user_papers`.
-- Users can read papers and annotations only when linked through `user_papers`.
-- Library management is user-scoped through `user_papers`.
-- Admin client usage in the app bypasses user scoping intentionally for shared paper/annotation persistence and storage operations.
+### `userpapers`
+- Join collection linking authenticated users to papers in their private library.
+- Fields: `_id`, `userId`, `paperId`, `createdAt`, `updatedAt`.
+- Indexes: compound unique `(userId, paperId)`, secondary on `userId`.
+
+### `chats`
+- One document per paper, keyed by `paperId`.
+- Fields: `_id`, `paperId` (unique), `messages`, `expiresAt`, `createdAt`.
+- TTL index on `expiresAt` — MongoDB auto-deletes documents 24 hours after creation.
+
+### `passwordresettokens`
+- Fields: `_id`, `tokenHash` (unique), `userId`, `expiresAt`.
+- TTL index on `expiresAt` — tokens expire 1 hour after creation (set at document creation time).
+
+### NextAuth-managed collections
+- `users` — `_id` UUID string, `email`, `passwordHash`, `emailVerified`, and other NextAuth standard fields.
+- `accounts` — credentials provider link managed by NextAuth adapter.
+
+## S3 Object Storage
+- Bucket layout:
+  - `arxiv/<arxivId>.pdf` — cached arXiv PDFs, shared across all users who added that paper.
+  - `user-uploads/<userId>/<uploadId>.pdf` — private user-uploaded PDFs.
+- `storagePath` on each paper document is the S3 key.
+- The PDF API route generates an S3 presigned URL for authenticated access, with arXiv-direct fallback for uncached papers.
+
+## Authorization Model
+- There is no database-level row security. Authorization is enforced at the application layer.
+- Every server-data function that returns paper or annotation data takes a `userId` and calls `UserPaper.exists({ userId, paperId })` before returning. This is the application-layer replacement for Supabase RLS.
+- Library management is user-scoped through `userpapers`.
+
+## Deduplication
+- arXiv papers are global: one document per `arxivId`, shared across all users. A user adding an existing arXiv paper creates only a new `userpapers` document.
+- User-uploaded papers are private: one document per upload. The document and its S3 object are deleted when the owner removes it from their library.
 
 ## Application Invariants
-- A paper is globally deduplicated by `arxiv_id`.
-- A user can link an existing paper into their library without duplicating the paper row.
-- Annotations are page-scoped and rely on valid bounding boxes for overlay rendering. Stored boxes should be as close as possible to the final `text_ref`, not just the original source chunk, and stored anchors should remain aligned with the page-level extracted text.
-- PDF URLs may point to cached Supabase storage, but the PDF API route also preserves arXiv fallback fetching.
-- `ai_summary` is treated as optional in code because older schemas may not have the column yet.
-- `annotation_style` defaults to `'default'` for all existing rows when the column is added; no migration of old annotations is required.
-- KV chat persistence is optional and failure-tolerant.
+- A paper is globally deduplicated by `arxivId` (arXiv papers only).
+- Annotations are page-scoped and rely on valid bounding boxes for overlay rendering. Stored boxes should be as close as possible to the final `text_ref`, and stored anchors should remain aligned with the page-level extracted text.
+- Chat persistence is TTL-based. Absence of a chat document is a normal state, not an error.
+- `aiSummary` is treated as optional; absence triggers a fallback summary path.
+- `annotationStyle` defaults to `"default"` for all new documents; no migration of existing annotations is required when adding new styles.
 
 ## If You Change Data Shape, Also Inspect
-- `supabase/schema.sql`
+- Relevant Mongoose model in `lib/models/`
 - `lib/types.ts`
 - `lib/server-data.ts`
-- relevant route handlers under `app/api/`
-- frontend consumers that render paper or annotation fields
+- Relevant route handlers under `app/api/`
+- Frontend consumers that render paper or annotation fields
 - Python output contract if the new field originates from ingestion
 
 ## Verification
 - `npm run typecheck`
 - Any route or UI checks affected by the shape change
-- Python tests too if the new field is emitted by the ingestion service
+- Python checks if the new field is emitted by the ingestion service

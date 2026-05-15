@@ -70,16 +70,16 @@
   - `docs/api-server-data.md`
   - `docs/architecture.md`
 - Inspect next:
-  - `supabase/schema.sql`
-  - `supabase/storage.md`
+  - `lib/models/` — Mongoose model definitions
+  - `lib/s3.ts` — S3 storage helpers
   - `lib/server-data.ts`
   - `lib/types.ts`
   - affected route handlers or UI consumers
 - Preserve:
-  - one paper per `arxiv_id`
-  - user library gating through `user_papers`
-  - storage path expectations for cached PDFs
-  - fallback behavior for optional or rolling-schema fields like `ai_summary`
+  - one paper per `arxivId`
+  - user library gating through `userpapers`
+  - S3 key expectations for cached PDFs
+  - fallback behavior for optional or rolling-schema fields like `aiSummary`
 - Verify:
   - `npm run typecheck`
   - relevant frontend or Python checks based on the changed field source
@@ -95,7 +95,7 @@
   - `app/auth/*`
   - `app/api/ingest/route.ts`
   - `app/api/papers/[paperId]/route.ts`
-  - `lib/supabase/*`
+  - `lib/models/`
   - `lib/server-data.ts`
 - Preserve:
   - auth-required ingestion

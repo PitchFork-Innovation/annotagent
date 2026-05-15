@@ -45,10 +45,36 @@
   - `python3 -m py_compile python_service/main.py`
   - `npm run typecheck` if the TypeScript side consumes changed data
 
+## Environment Variables
+
+**Required:**
+- `MONGODB_URI` — MongoDB Atlas connection string (e.g. `mongodb+srv://...`)
+- `NEXTAUTH_SECRET` — random 32+ byte string; generate with `openssl rand -base64 32`
+- `NEXTAUTH_URL` — full URL of the deployment (e.g. `http://localhost:3000` for dev)
+- `RESEND_API_KEY` — Resend API key
+- `RESEND_FROM_EMAIL` — verified sender address in Resend
+- `AWS_REGION` — S3 bucket region (e.g. `us-east-1`)
+- `AWS_ACCESS_KEY_ID` — IAM credentials
+- `AWS_SECRET_ACCESS_KEY` — IAM credentials
+- `S3_BUCKET` — S3 bucket name
+- `PYTHON_SERVICE_URL` — base URL of the running FastAPI ingestion service
+- `PYTHON_SERVICE_SHARED_SECRET` — HMAC secret shared between Next.js and Python service
+- `OPENAI_API_KEY` — OpenAI API key used by the Python service
+
+**Removed (Supabase / Vercel KV era):**
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`
+
+## Provisioning Checklist
+
+1. **MongoDB Atlas** — create an M0 free cluster, get the connection string, and add your deployment's IP (or `0.0.0.0/0` for dev) to the IP allowlist. Set `MONGODB_URI`.
+2. **AWS S3** — create a bucket, create an IAM user with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListBucket` on that bucket. Configure CORS to allow `PUT` from the app origin. Set `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`.
+3. **Resend** — obtain an API key and verify a sender domain or address. Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`.
+4. **NextAuth** — run `openssl rand -base64 32` and set the output as `NEXTAUTH_SECRET`. Set `NEXTAUTH_URL` to the deployment URL.
+
 ## Common Agent Habits For This Repo
 - Start from a doc page, then inspect the exact code paths it names.
 - Prefer modifying existing helpers over duplicating logic in new files.
-- Treat missing KV or missing `ai_summary` support as expected fallback scenarios, not hard failures.
+- Treat a missing chat document in MongoDB as an expected fallback state, not an error. Missing `aiSummary` is also an expected fallback.
 - Be careful when a change crosses frontend, server-data, schema, and Python at once; those are the easiest places for contract drift.
 
 ## Documentation Rule
