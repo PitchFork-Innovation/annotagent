@@ -120,7 +120,7 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
 
         {/* Title */}
         <h1 className="reveal reveal-2 mb-1 font-display text-2xl tracking-wide text-ghost">
-          Annotagent
+          Annotagent <span className="text-smoke">by PitchFork</span>
         </h1>
         <p className="reveal reveal-2 mb-8 text-[11px] uppercase tracking-[0.35em] text-smoke">
           Restricted Access

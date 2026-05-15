@@ -278,7 +278,7 @@ export function LandingShell({ user, papers: initialPapers, hasAuthError = false
         <div className="mx-auto flex max-w-7xl items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="font-mono text-[11px] font-medium uppercase tracking-[0.44em] text-gold">
-              Annotagent
+              Annotagent <span className="text-smoke">by PitchFork</span>
             </span>
             <span className="h-1 w-1 rounded-full bg-rim" />
             <span className="font-mono text-[11px] text-smoke">AI research annotation</span>
@@ -589,7 +589,7 @@ export function LandingShell({ user, papers: initialPapers, hasAuthError = false
 
         <footer className="mt-20 flex items-center justify-center border-t border-rim/50 pt-8">
           <span className="font-mono text-[10px] uppercase tracking-[0.5em] text-fog/50">
-            Annotagent · AI Paper Annotation
+            Annotagent by PitchFork · AI Paper Annotation
           </span>
         </footer>
       </div>
