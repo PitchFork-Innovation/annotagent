@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/auth";
 import { ensurePaperIngested } from "@/lib/server-data";
 
 export const maxDuration = 300;
@@ -20,11 +20,7 @@ export async function POST(request: NextRequest) {
   const arxivId = payload.data.arxivId.trim();
   const jobId = payload.data.jobId;
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
+  const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyIngestedPaper } from "@/lib/server-data";
 import { ingestionPayloadSchema } from "@/lib/ingestion-schema";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/auth";
 
 export async function POST(request: NextRequest) {
   const payload = ingestionPayloadSchema.safeParse(await request.json().catch(() => ({})));
@@ -10,11 +10,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid ingestion payload." }, { status: 400 });
   }
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
+  const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }

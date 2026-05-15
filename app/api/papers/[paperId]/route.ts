@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPaperWorkspace, removePaperFromLibrary } from "@/lib/server-data";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/auth";
 
 type Props = {
   params: Promise<{
@@ -9,11 +9,7 @@ type Props = {
 };
 
 export async function GET(_request: NextRequest, { params }: Props) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
+  const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
@@ -29,11 +25,7 @@ export async function GET(_request: NextRequest, { params }: Props) {
 }
 
 export async function DELETE(_request: NextRequest, { params }: Props) {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
+  const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
