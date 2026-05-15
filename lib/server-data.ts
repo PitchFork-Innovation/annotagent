@@ -2,10 +2,18 @@ import http from "http";
 import https from "https";
 import { randomUUID } from "crypto";
 import { env } from "./env";
-import { getChatHistory, setChatHistory } from "./kv";
+import { getChatHistory, setChatHistory } from "./chat-store";
 import { createPythonServiceToken } from "./python-auth";
-import { createSupabaseAdminClient } from "./supabase/admin";
-import { createSupabaseServerClient } from "./supabase/server";
+import { connectDB } from "./mongodb";
+import { Paper, UserPaper } from "./models";
+import {
+  createPresignedPutUrl,
+  createPresignedGetUrl,
+  deleteObject,
+  objectExists,
+  uploadObject,
+} from "./s3";
+import { getSessionUser } from "@/auth";
 import type {
   AnnotationRecord,
   ChatMessage,
@@ -15,155 +23,79 @@ import type {
   PaperWorkspace,
   TextAnchor,
   TextAnchorPayload,
-  UserProfile
+  UserProfile,
 } from "./types";
 
 const PYTHON_INGEST_TIMEOUT_MS = env.PYTHON_INGEST_TIMEOUT_MS;
-const SIGNED_URL_TTL_SECONDS = 60 * 15;
-let aiSummaryColumnAvailable: boolean | null = null;
 
-type RecentPaperRow = {
-  id: string;
-  arxiv_id: string | null;
-  source: string | null;
-  original_filename: string | null;
-  title: string;
-  abstract: string;
-  annotations?: Array<{
-    count: number;
-  }> | null;
-};
-
-type RecentUserPaperRow = {
-  paper: RecentPaperRow | RecentPaperRow[] | null;
-};
-
-type LinkedPaperRow = {
-  paper: {
-    id: string;
-    source: string | null;
-    arxiv_id: string | null;
-    original_filename: string | null;
-    storage_path: string | null;
-    title: string;
-    abstract: string;
-    pdf_url: string;
-  } | null;
-};
-
-type AnnotationRow = {
-  id: string;
-  paper_id: string;
-  page_number: number;
-  type: AnnotationRecord["type"];
-  text_ref: string;
-  note: string;
-  importance: AnnotationRecord["importance"];
-  bbox: AnnotationRecord["bbox"];
-  anchor: TextAnchorPayload | null;
-};
-
-type WorkspacePaperRow = {
-  id: string;
-  source: string | null;
-  arxiv_id: string | null;
-  original_filename: string | null;
-  storage_path: string | null;
-  title: string;
-  abstract: string;
-  ai_summary: string | null;
-  pdf_url: string;
-  page_count: number;
-  full_text: string;
-  starter_questions: string[] | null;
-  annotation_style: string | null;
-};
+// ─── Public API ─────────────────────────────────────────────────────────────
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
-  if (!user?.email) {
-    return null;
-  }
-
-  return {
-    id: user.id,
-    email: user.email
-  };
+  return getSessionUser();
 }
 
 export async function getRecentPapers(): Promise<PaperListItem[]> {
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return [];
-  }
-
-  const { data } = await supabase
-    .from("user_papers")
-    .select("paper:papers(id, source, arxiv_id, original_filename, title, abstract, annotations(count))")
-    .eq("user_id", user.id)
-    .limit(12);
-
-  if (!data) {
-    return [];
-  }
-
-  return (data as unknown as RecentUserPaperRow[])
-    .map((entry) => normalizeRecentPaper(entry.paper))
-    .filter((paper): paper is RecentPaperRow => Boolean(paper))
-    .map((paper) => ({
-      id: paper.id,
-      source: normalizeSource(paper.source),
-      arxivId: paper.arxiv_id,
-      originalFilename: paper.original_filename,
-      title: paper.title,
-      abstract: paper.abstract,
-      annotationCount: paper.annotations?.[0]?.count ?? 0
+  const user = await getSessionUser();
+  if (!user) return [];
+  await connectDB();
+  const links = await UserPaper.find({ userId: user.id })
+    .sort({ createdAt: -1 })
+    .limit(12)
+    .lean();
+  if (!links.length) return [];
+  const paperIds = links.map((l) => l.paperId as string);
+  const papers = await Paper.find(
+    { _id: { $in: paperIds } },
+    { _id: 1, source: 1, arxivId: 1, originalFilename: 1, title: 1, abstract: 1, "annotations._id": 1 }
+  ).lean();
+  const paperMap = new Map(papers.map((p) => [p._id as string, p]));
+  return paperIds
+    .map((id) => paperMap.get(id))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p))
+    .map((p) => ({
+      id: p._id as string,
+      source: normalizeSource(p.source),
+      arxivId: (p.arxivId as string | null) ?? null,
+      originalFilename: (p.originalFilename as string | null) ?? null,
+      title: p.title as string,
+      abstract: p.abstract as string,
+      annotationCount: Array.isArray(p.annotations) ? p.annotations.length : 0,
     }));
 }
 
 export async function getPaperWorkspace(paperId: string): Promise<PaperWorkspace | null> {
-  const supabase = await createSupabaseServerClient();
-  const [paper, annotationsResult] = await Promise.all([
-    fetchPaperWorkspaceRow(supabase, paperId),
-    supabase
-      .from("annotations")
-      .select("id, paper_id, page_number, type, text_ref, note, importance, bbox, anchor")
-      .eq("paper_id", paperId)
-      .order("page_number", { ascending: true })
-  ]);
-
-  if (!paper) {
-    return null;
-  }
-
+  const user = await getSessionUser();
+  if (!user) return null;
+  await connectDB();
+  const linked = await UserPaper.exists({ userId: user.id, paperId });
+  if (!linked) return null;
+  const paper = await Paper.findById(paperId).lean();
+  if (!paper) return null;
   const chatHistory = await getChatHistory(paperId);
-  const resolvedSummary = await ensurePaperSummary(paper as WorkspacePaperRow);
-
+  const resolvedSummary = await ensurePaperSummary(paper as unknown as Record<string, unknown>);
   return {
     paper: {
-      id: paper.id,
+      id: paper._id as string,
       source: normalizeSource(paper.source),
-      arxivId: paper.arxiv_id,
-      originalFilename: paper.original_filename,
-      title: paper.title,
-      abstract: paper.abstract,
-      aiSummary: resolvedSummary ?? paper.ai_summary ?? paper.abstract,
-      pdfUrl: paper.pdf_url,
-      pageCount: paper.page_count,
-      fullText: paper.full_text,
-      starterQuestions: paper.starter_questions ?? [],
-      annotationStyle: (paper.annotation_style as "default" | "novice" | "expert") ?? "default"
+      arxivId: (paper.arxivId as string | null) ?? null,
+      originalFilename: (paper.originalFilename as string | null) ?? null,
+      title: paper.title as string,
+      abstract: paper.abstract as string,
+      aiSummary:
+        resolvedSummary ??
+        (paper.aiSummary as string | null) ??
+        (paper.abstract as string),
+      pdfUrl: paper.pdfUrl as string,
+      pageCount: paper.pageCount as number,
+      fullText: paper.fullText as string,
+      starterQuestions: (paper.starterQuestions as string[]) ?? [],
+      annotationStyle:
+        ((paper.annotationStyle as string) as "default" | "novice" | "expert") ?? "default",
     },
-    annotations: (annotationsResult.data ?? []).map(mapAnnotationRow),
-    chatHistory
+    annotations: ((paper.annotations as unknown[]) ?? []).map((a) =>
+      mapAnnotationDoc(a, paperId)
+    ),
+    chatHistory,
   };
 }
 
@@ -174,91 +106,10 @@ export async function ensurePaperIngested(arxivId: string, userId: string, jobId
 }
 
 export async function applyIngestedPaper(payload: IngestionPayload, userId: string) {
-  const supabase = await createSupabaseServerClient();
-  const admin = createSupabaseAdminClient();
-
   if (payload.source === "arxiv") {
-    return applyArxivIngestedPaper(payload, userId, supabase, admin);
+    return applyArxivIngestedPaper(payload, userId);
   }
-
-  return applyUploadIngestedPaper(payload, userId, supabase, admin);
-}
-
-async function applyArxivIngestedPaper(
-  payload: IngestionPayload,
-  userId: string,
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  admin: ReturnType<typeof createSupabaseAdminClient>
-) {
-  if (!payload.arxivId) {
-    throw new Error("arxivId is required for arXiv ingestion.");
-  }
-
-  const normalizedArxivId = payload.arxivId.trim();
-  const { data: existing } = await admin
-    .from("papers")
-    .select("id, arxiv_id")
-    .eq("source", "arxiv")
-    .eq("arxiv_id", normalizedArxivId)
-    .maybeSingle();
-
-  if (existing) {
-    await supabase.from("user_papers").upsert({ user_id: userId, paper_id: existing.id });
-    return existing;
-  }
-
-  const cachedPdfUrl = await cachePaperPdf(admin, normalizedArxivId, payload.pdfUrl);
-  const { data: createdPaper, error: paperError } = await insertPaperRow(admin, payload, cachedPdfUrl);
-
-  if (paperError?.code === "23505") {
-    const { data: duplicatePaper } = await admin
-      .from("papers")
-      .select("id, arxiv_id")
-      .eq("source", "arxiv")
-      .eq("arxiv_id", normalizedArxivId)
-      .single();
-
-    if (duplicatePaper) {
-      await supabase.from("user_papers").upsert({ user_id: userId, paper_id: duplicatePaper.id });
-      return duplicatePaper;
-    }
-  }
-
-  if (paperError || !createdPaper) {
-    throw new Error(paperError?.message ?? "Paper insert failed.");
-  }
-
-  await insertAnnotations(admin, createdPaper.id, payload);
-  await supabase.from("user_papers").upsert({ user_id: userId, paper_id: createdPaper.id });
-  return createdPaper;
-}
-
-async function applyUploadIngestedPaper(
-  payload: IngestionPayload,
-  userId: string,
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  admin: ReturnType<typeof createSupabaseAdminClient>
-) {
-  if (!payload.storagePath) {
-    throw new Error("storagePath is required for upload ingestion.");
-  }
-
-  // Per-PRD: uploads are not deduped. Each upload mints a fresh paper row,
-  // even if the file is byte-identical to one a different user uploaded.
-  const expectedPrefix = `user-uploads/${userId}/`;
-  if (!payload.storagePath.startsWith(expectedPrefix)) {
-    throw new Error("Upload storage path does not belong to the authenticated user.");
-  }
-
-  const { data: createdPaper, error: paperError } = await insertPaperRow(admin, payload, payload.pdfUrl);
-
-  if (paperError || !createdPaper) {
-    throw new Error(paperError?.message ?? "Paper insert failed.");
-  }
-
-  await insertAnnotations(admin, createdPaper.id, payload);
-  await supabase.from("user_papers").upsert({ user_id: userId, paper_id: createdPaper.id });
-  return createdPaper;
+  return applyUploadIngestedPaper(payload, userId);
 }
 
 export async function upsertChatHistory(paperId: string, messages: ChatMessage[]) {
@@ -266,36 +117,45 @@ export async function upsertChatHistory(paperId: string, messages: ChatMessage[]
 }
 
 export async function reprocessPaperAnnotations(paperId: string, userId: string, jobId?: string) {
-  const admin = createSupabaseAdminClient();
+  await connectDB();
   const paper = await getLinkedPaperForUser(paperId, userId);
 
-  if (!paper?.id || !paper.title || !paper.pdf_url) {
+  if (!paper?.title || !(paper.pdfUrl as string | null)) {
     throw new Error("Paper not found in your library.");
   }
 
   const source = normalizeSource(paper.source);
-  const resolvedPdfUrl = await resolvePreferredPaperPdfUrl(admin, source, paper.arxiv_id, paper.storage_path, paper.pdf_url);
+  const resolvedPdfUrl = await resolvePreferredPaperPdfUrl(
+    source,
+    (paper.arxivId as string | null) ?? null,
+    (paper.storagePath as string | null) ?? null,
+    paper.pdfUrl as string
+  );
   const payload = await fetchReprocessPayload(
     {
-      paperId: paper.id,
+      paperId: paper._id as string,
       source,
-      arxivId: paper.arxiv_id,
-      originalFilename: paper.original_filename,
-      storagePath: paper.storage_path,
-      title: paper.title,
-      abstract: paper.abstract,
-      pdfUrl: resolvedPdfUrl
+      arxivId: (paper.arxivId as string | null) ?? null,
+      originalFilename: (paper.originalFilename as string | null) ?? null,
+      storagePath: (paper.storagePath as string | null) ?? null,
+      title: paper.title as string,
+      abstract: paper.abstract as string,
+      pdfUrl: resolvedPdfUrl,
     },
     jobId
   );
-  return applyReprocessedPaper(paper.id, userId, payload);
+  return applyReprocessedPaper(paper._id as string, userId, payload);
 }
 
-export async function applyReprocessedPaper(paperId: string, userId: string, payload: IngestionPayload) {
-  const admin = createSupabaseAdminClient();
+export async function applyReprocessedPaper(
+  paperId: string,
+  userId: string,
+  payload: IngestionPayload
+) {
+  await connectDB();
   const paper = await getLinkedPaperForUser(paperId, userId);
 
-  if (!paper?.id || !paper.title || !paper.pdf_url) {
+  if (!paper?.title || !(paper.pdfUrl as string | null)) {
     throw new Error("Paper not found in your library.");
   }
 
@@ -303,81 +163,49 @@ export async function applyReprocessedPaper(paperId: string, userId: string, pay
   if (payload.source !== source) {
     throw new Error("Reprocess payload source does not match the selected paper.");
   }
-  if (source === "arxiv" && paper.arxiv_id !== payload.arxivId) {
+  if (source === "arxiv" && paper.arxivId !== payload.arxivId) {
     throw new Error("Reprocess payload does not match the selected paper.");
   }
 
-  const cachedPdfUrl =
-    source === "arxiv" && payload.arxivId
-      ? await cachePaperPdf(admin, payload.arxivId, payload.pdfUrl)
-      : paper.pdf_url;
-  const { error: paperError } = await updatePaperRow(admin, paper.id, payload, cachedPdfUrl);
-
-  if (paperError) {
-    throw new Error(paperError.message);
+  let cachedPdfUrl = paper.pdfUrl as string;
+  if (source === "arxiv" && payload.arxivId) {
+    await cachePaperPdf(payload.arxivId, payload.pdfUrl);
+    cachedPdfUrl = payload.pdfUrl;
   }
 
-  const { error: deleteError } = await admin.from("annotations").delete().eq("paper_id", paper.id);
+  await Paper.findByIdAndUpdate(paperId, buildPaperUpdate(payload, cachedPdfUrl));
 
-  if (deleteError) {
-    throw new Error(deleteError.message);
+  const annotationCount = payload.annotations.length;
+  if (annotationCount === 0) {
+    throw new Error("Python ingestion completed without annotations.");
   }
 
-  await insertAnnotations(admin, paper.id, payload);
-
-  const { count } = await admin
-    .from("annotations")
-    .select("*", { count: "exact", head: true })
-    .eq("paper_id", paper.id);
-
-  return {
-    paperId: paper.id,
-    annotationCount: count ?? 0
-  };
+  return { paperId, annotationCount };
 }
 
 export async function removePaperFromLibrary(paperId: string, userId: string) {
-  const supabase = await createSupabaseServerClient();
-  const admin = createSupabaseAdminClient();
-
+  await connectDB();
   const paper = await getLinkedPaperForUser(paperId, userId);
-  if (!paper?.id) {
+  if (!paper) {
     throw new Error("Paper not found in your library.");
   }
 
-  const { error: unlinkError } = await supabase
-    .from("user_papers")
-    .delete()
-    .eq("user_id", userId)
-    .eq("paper_id", paper.id);
+  await UserPaper.deleteOne({ userId, paperId });
 
-  if (unlinkError) {
-    throw new Error(unlinkError.message);
-  }
-
-  // arXiv papers are shared across users; leave the global record and any cached
-  // PDF in place. Uploads are private and cascade-deleted when no other user
-  // links them. With the no-dedup model the "other refs" check is structurally
-  // always zero in v1, but it's performed defensively.
   const source = normalizeSource(paper.source);
   if (source !== "upload") {
     return { source };
   }
 
-  const { count: remainingLinks } = await admin
-    .from("user_papers")
-    .select("*", { count: "exact", head: true })
-    .eq("paper_id", paper.id);
-
-  if ((remainingLinks ?? 0) > 0) {
+  const remainingLinks = await UserPaper.countDocuments({ paperId });
+  if (remainingLinks > 0) {
     return { source };
   }
 
-  await admin.from("annotations").delete().eq("paper_id", paper.id);
-  await admin.from("papers").delete().eq("id", paper.id);
-
-  if (paper.storage_path) {
-    await admin.storage.from(env.S3_BUCKET).remove([paper.storage_path]);
+  await Paper.deleteOne({ _id: paperId });
+  const storagePath = paper.storagePath as string | null;
+  if (storagePath) {
+    await deleteObject(storagePath);
   }
 
   return { source };
@@ -392,79 +220,246 @@ export async function createUploadSlot(userId: string, declaredSize: number) {
     throw new Error("PDF must be 25 MB or smaller.");
   }
 
-  const admin = createSupabaseAdminClient();
   const uploadId = randomUUID();
   const storagePath = `user-uploads/${userId}/${uploadId}.pdf`;
+  const signedUploadUrl = await createPresignedPutUrl(storagePath, "application/pdf");
 
-  const { data, error } = await admin.storage
-    .from(env.S3_BUCKET)
-    .createSignedUploadUrl(storagePath);
-
-  if (error || !data) {
-    throw new Error(error?.message ?? "Unable to create signed upload URL.");
-  }
-
-  return {
-    uploadId,
-    storagePath,
-    signedUploadUrl: data.signedUrl,
-    signedUploadToken: data.token
-  };
+  return { uploadId, storagePath, signedUploadUrl };
 }
 
 export async function createUploadDownloadUrl(userId: string, uploadId: string) {
-  const admin = createSupabaseAdminClient();
   const storagePath = `user-uploads/${userId}/${uploadId}.pdf`;
-  const { data, error } = await admin.storage
-    .from(env.S3_BUCKET)
-    .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
-
-  if (error || !data?.signedUrl) {
-    throw new Error(error?.message ?? "Unable to locate the uploaded PDF.");
-  }
-
-  return {
-    storagePath,
-    signedDownloadUrl: data.signedUrl
-  };
+  const signedDownloadUrl = await createPresignedGetUrl(storagePath);
+  return { storagePath, signedDownloadUrl };
 }
 
-function mapAnnotationRow(row: AnnotationRow): AnnotationRecord {
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+async function applyArxivIngestedPaper(payload: IngestionPayload, userId: string) {
+  if (!payload.arxivId) throw new Error("arxivId is required for arXiv ingestion.");
+  const normalizedArxivId = payload.arxivId.trim();
+  await connectDB();
+
+  const existing = await Paper.findOne(
+    { source: "arxiv", arxivId: normalizedArxivId },
+    { _id: 1, arxivId: 1 }
+  ).lean();
+
+  if (existing) {
+    await UserPaper.findOneAndUpdate(
+      { userId, paperId: existing._id as string },
+      { userId, paperId: existing._id as string },
+      { upsert: true }
+    );
+    return existing;
+  }
+
+  await cachePaperPdf(normalizedArxivId, payload.pdfUrl);
+
+  const paperId = randomUUID();
+  try {
+    await Paper.create({ _id: paperId, ...buildPaperDoc(payload, payload.pdfUrl) });
+  } catch (err: unknown) {
+    const mongoErr = err as { code?: number };
+    if (mongoErr.code === 11000) {
+      // Race condition: another request inserted the same arXiv paper
+      const dup = await Paper.findOne(
+        { source: "arxiv", arxivId: normalizedArxivId },
+        { _id: 1, arxivId: 1 }
+      ).lean();
+      if (dup) {
+        await UserPaper.findOneAndUpdate(
+          { userId, paperId: dup._id as string },
+          { userId, paperId: dup._id as string },
+          { upsert: true }
+        );
+        return dup;
+      }
+    }
+    throw err;
+  }
+
+  await UserPaper.findOneAndUpdate(
+    { userId, paperId },
+    { userId, paperId },
+    { upsert: true }
+  );
+  return { _id: paperId, arxivId: normalizedArxivId };
+}
+
+async function applyUploadIngestedPaper(payload: IngestionPayload, userId: string) {
+  if (!payload.storagePath) throw new Error("storagePath is required for upload ingestion.");
+  // Per-PRD: uploads are not deduped. Each upload mints a fresh paper row,
+  // even if the file is byte-identical to one a different user uploaded.
+  const expectedPrefix = `user-uploads/${userId}/`;
+  if (!payload.storagePath.startsWith(expectedPrefix)) {
+    throw new Error("Upload storage path does not belong to the authenticated user.");
+  }
+  await connectDB();
+  const paperId = randomUUID();
+  await Paper.create({ _id: paperId, ...buildPaperDoc(payload, payload.pdfUrl) });
+  await UserPaper.findOneAndUpdate(
+    { userId, paperId },
+    { userId, paperId },
+    { upsert: true }
+  );
+  return { _id: paperId };
+}
+
+function mapAnnotationDoc(doc: unknown, contextPaperId: string): AnnotationRecord {
+  const a = doc as Record<string, unknown>;
   return {
-    id: row.id,
-    paperId: row.paper_id,
-    pageNumber: row.page_number,
-    type: row.type,
-    textRef: row.text_ref,
-    note: row.note,
-    importance: row.importance,
-    bbox: row.bbox,
-    anchor: mapTextAnchor(row.anchor)
+    id: a._id as string,
+    paperId: contextPaperId,
+    pageNumber: a.pageNumber as number,
+    type: a.type as AnnotationRecord["type"],
+    textRef: a.textRef as string,
+    note: a.note as string,
+    importance: a.importance as 1 | 2 | 3,
+    bbox: a.bbox as AnnotationRecord["bbox"],
+    anchor: mapTextAnchor(a.anchor as TextAnchorPayload | null | undefined),
   };
 }
 
 function mapTextAnchor(anchor: TextAnchorPayload | null | undefined): TextAnchor | null {
-  if (!anchor) {
-    return null;
-  }
-
+  if (!anchor) return null;
   return {
     pageTextStart: anchor.page_text_start,
     pageTextEnd: anchor.page_text_end,
-    occurrenceIndex: anchor.occurrence_index
+    occurrenceIndex: anchor.occurrence_index,
   };
 }
 
-function normalizeRecentPaper(paper: RecentUserPaperRow["paper"]): RecentPaperRow | null {
-  if (Array.isArray(paper)) {
-    return paper[0] ?? null;
-  }
-
-  return paper;
+function normalizeSource(source: unknown): PaperSource {
+  return source === "upload" ? "upload" : "arxiv";
 }
 
-function normalizeSource(source: string | null | undefined): PaperSource {
-  return source === "upload" ? "upload" : "arxiv";
+async function getLinkedPaperForUser(paperId: string, userId: string) {
+  const linked = await UserPaper.exists({ userId, paperId });
+  if (!linked) return null;
+  return Paper.findById(paperId).lean();
+}
+
+async function cachePaperPdf(arxivId: string, sourceUrl: string): Promise<void> {
+  const key = `arxiv/${arxivId}.pdf`;
+  if (await objectExists(key)) return;
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) return;
+    const buf = await response.arrayBuffer();
+    await uploadObject(key, buf, "application/pdf");
+  } catch {
+    // Non-fatal: proxy will fall back to arxiv.org
+  }
+}
+
+async function resolvePreferredPaperPdfUrl(
+  source: PaperSource,
+  arxivId: string | null,
+  storagePath: string | null,
+  fallbackUrl: string
+): Promise<string> {
+  if (source === "upload") {
+    if (!storagePath) throw new Error("Upload paper is missing its storage path.");
+    return createPresignedGetUrl(storagePath);
+  }
+  if (!arxivId) return fallbackUrl;
+  const key = `arxiv/${arxivId}.pdf`;
+  if (await objectExists(key)) {
+    return createPresignedGetUrl(key);
+  }
+  return fallbackUrl;
+}
+
+async function ensurePaperSummary(paper: Record<string, unknown>): Promise<string | null> {
+  const existing = normalizeSummaryText(paper.aiSummary as string | null | undefined);
+  if (existing) return existing;
+  try {
+    const generated = await fetchPaperSummary(
+      paper.title as string,
+      paper.abstract as string,
+      paper.fullText as string
+    );
+    if (!generated) return null;
+    await Paper.findByIdAndUpdate(paper._id, { aiSummary: generated });
+    return generated;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPaperSummary(
+  title: string,
+  abstract: string,
+  fullText: string
+): Promise<string | null> {
+  const url = new URL("/summarize", env.PYTHON_SERVICE_URL);
+  const payload = JSON.stringify({ title, abstract, fullText });
+  const response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS);
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error("Python summary service failed.");
+  }
+  const parsed = JSON.parse(response.body) as { summary?: string };
+  return normalizeSummaryText(parsed.summary);
+}
+
+function normalizeSummaryText(summary: string | null | undefined): string | null {
+  if (!summary) return null;
+  const t = summary.trim();
+  return t.length > 0 ? t : null;
+}
+
+function buildPaperDoc(payload: IngestionPayload, pdfUrl: string) {
+  return {
+    source: payload.source,
+    arxivId: payload.source === "arxiv" ? payload.arxivId : null,
+    originalFilename: payload.source === "upload" ? payload.originalFilename : null,
+    storagePath:
+      payload.source === "upload"
+        ? payload.storagePath
+        : payload.arxivId
+          ? `arxiv/${payload.arxivId}.pdf`
+          : null,
+    title: payload.title,
+    abstract: payload.abstract,
+    aiSummary: payload.summary || payload.abstract,
+    pdfUrl,
+    pageCount: payload.pageCount,
+    fullText: payload.fullText,
+    starterQuestions: payload.starterQuestions,
+    annotationStyle: payload.annotationStyle ?? "default",
+    annotations: payload.annotations.map((a) => ({
+      _id: randomUUID(),
+      pageNumber: a.page_number,
+      type: a.type,
+      textRef: a.text_ref,
+      note: a.note,
+      importance: a.importance,
+      bbox: a.bbox,
+      anchor: a.anchor ?? null,
+    })),
+  };
+}
+
+function buildPaperUpdate(payload: IngestionPayload, pdfUrl: string) {
+  return {
+    aiSummary: payload.summary || payload.abstract,
+    pdfUrl,
+    pageCount: payload.pageCount,
+    fullText: payload.fullText,
+    starterQuestions: payload.starterQuestions,
+    annotationStyle: payload.annotationStyle ?? "default",
+    annotations: payload.annotations.map((a) => ({
+      _id: randomUUID(),
+      pageNumber: a.page_number,
+      type: a.type,
+      textRef: a.text_ref,
+      note: a.note,
+      importance: a.importance,
+      bbox: a.bbox,
+      anchor: a.anchor ?? null,
+    })),
+  };
 }
 
 async function fetchArxivIngestionPayload(arxivId: string, jobId?: string): Promise<IngestionPayload> {
@@ -498,14 +493,13 @@ async function fetchReprocessPayload(
     title: paper.title,
     abstract: paper.abstract,
     pdf_url: paper.pdfUrl,
-    job_id: resolvedJobId
+    job_id: resolvedJobId,
   });
   return fetchPythonPayload(url, payload, createPythonServiceToken(resolvedJobId, "reprocess"));
 }
 
 async function fetchPythonPayload(url: URL, payload: string, token: string): Promise<IngestionPayload> {
   let response: { status: number; body: string };
-
   try {
     response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS, token);
   } catch (error) {
@@ -514,20 +508,26 @@ async function fetchPythonPayload(url: URL, payload: string, token: string): Pro
   }
 
   if (response.status < 200 || response.status >= 300) {
+    let detail: string | undefined;
     try {
       const parsed = JSON.parse(response.body) as { detail?: string };
-      throw new Error(parsed.detail ?? "Python ingestion service failed.");
+      detail = parsed.detail;
     } catch {
-      throw new Error(response.body || "Python ingestion service failed.");
+      // body is not JSON — fall through to use raw body
     }
+    throw new Error(detail ?? (response.body || "Python ingestion service failed."));
   }
 
   return JSON.parse(response.body) as IngestionPayload;
 }
 
-function postJson(url: URL, body: string, timeoutMs: number, token?: string): Promise<{ status: number; body: string }> {
+function postJson(
+  url: URL,
+  body: string,
+  timeoutMs: number,
+  token?: string
+): Promise<{ status: number; body: string }> {
   const client = url.protocol === "https:" ? https : http;
-
   return new Promise((resolve, reject) => {
     const request = client.request(
       {
@@ -539,335 +539,29 @@ function postJson(url: URL, body: string, timeoutMs: number, token?: string): Pr
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       },
       (response) => {
         const chunks: Buffer[] = [];
-
         response.on("data", (chunk) => {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         });
-
         response.on("end", () => {
           resolve({
             status: response.statusCode ?? 500,
-            body: Buffer.concat(chunks).toString("utf8")
+            body: Buffer.concat(chunks).toString("utf8"),
           });
         });
       }
     );
-
     request.setTimeout(timeoutMs, () => {
-      request.destroy(new Error(`Python annotation service timed out after ${timeoutMs / 1000} seconds.`));
+      request.destroy(
+        new Error(`Python annotation service timed out after ${timeoutMs / 1000} seconds.`)
+      );
     });
-
-    request.on("error", (error) => {
-      reject(error);
-    });
-
+    request.on("error", (error) => reject(error));
     request.write(body);
     request.end();
   });
-}
-
-async function cachePaperPdf(admin: ReturnType<typeof createSupabaseAdminClient>, arxivId: string, sourceUrl: string) {
-  const objectPath = `arxiv/${arxivId}.pdf`;
-  const bucket = env.S3_BUCKET;
-
-  const { data: existing } = await admin.storage.from(bucket).list("arxiv", {
-    search: `${arxivId}.pdf`
-  });
-
-  if (!existing?.some((file: { name: string }) => file.name === `${arxivId}.pdf`)) {
-    try {
-      const response = await fetch(sourceUrl);
-      if (!response.ok) {
-        return sourceUrl;
-      }
-
-      const pdfBuffer = await response.arrayBuffer();
-      const { error } = await admin.storage.from(bucket).upload(objectPath, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: true
-      });
-
-      if (error) {
-        return sourceUrl;
-      }
-    } catch {
-      return sourceUrl;
-    }
-  }
-
-  const { data } = admin.storage.from(bucket).getPublicUrl(objectPath);
-  return data.publicUrl;
-}
-
-async function resolvePreferredPaperPdfUrl(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  source: PaperSource,
-  arxivId: string | null,
-  storagePath: string | null,
-  fallbackUrl: string
-) {
-  const bucket = env.S3_BUCKET;
-
-  if (source === "upload") {
-    if (!storagePath) {
-      throw new Error("Upload paper is missing its storage path.");
-    }
-    const { data, error } = await admin.storage.from(bucket).createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) {
-      throw new Error(error?.message ?? "Unable to create a signed URL for the uploaded PDF.");
-    }
-    return data.signedUrl;
-  }
-
-  if (!arxivId) {
-    return fallbackUrl;
-  }
-
-  const objectPath = `arxiv/${arxivId}.pdf`;
-  const { data: existing } = await admin.storage.from(bucket).list("arxiv", {
-    search: `${arxivId}.pdf`
-  });
-
-  if (existing?.some((file: { name: string }) => file.name === `${arxivId}.pdf`)) {
-    const { data, error } = await admin.storage.from(bucket).createSignedUrl(objectPath, SIGNED_URL_TTL_SECONDS);
-
-    if (error || !data?.signedUrl) {
-      throw new Error(error?.message ?? "Unable to create a signed URL for the cached PDF.");
-    }
-
-    return data.signedUrl;
-  }
-
-  // Older papers or missing storage objects may only have an arXiv PDF URL.
-  // Reprocess should fall back to that source and let the normal cache step
-  // restore the stored copy after a successful pipeline run.
-  return fallbackUrl;
-}
-
-async function ensurePaperSummary(paper: WorkspacePaperRow): Promise<string | null> {
-  if (aiSummaryColumnAvailable === false) {
-    return null;
-  }
-
-  const existingSummary = normalizeSummaryText(paper.ai_summary);
-  if (existingSummary) {
-    return existingSummary;
-  }
-
-  try {
-    const generatedSummary = await fetchPaperSummary(paper.title, paper.abstract, paper.full_text);
-    if (!generatedSummary) {
-      return null;
-    }
-
-    const admin = createSupabaseAdminClient();
-    const { error } = await updatePaperSummary(admin, paper.id, generatedSummary);
-
-    if (error) {
-      return generatedSummary;
-    }
-
-    return generatedSummary;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchPaperSummary(title: string, abstract: string, fullText: string): Promise<string | null> {
-  const url = new URL("/summarize", env.PYTHON_SERVICE_URL);
-  const payload = JSON.stringify({
-    title,
-    abstract,
-    fullText
-  });
-  const response = await postJson(url, payload, PYTHON_INGEST_TIMEOUT_MS);
-
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error("Python summary service failed.");
-  }
-
-  const parsed = JSON.parse(response.body) as { summary?: string };
-  return normalizeSummaryText(parsed.summary);
-}
-
-function normalizeSummaryText(summary: string | null | undefined) {
-  if (!summary) {
-    return null;
-  }
-
-  const normalized = summary.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-async function fetchPaperWorkspaceRow(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  paperId: string
-): Promise<WorkspacePaperRow | null> {
-  const includeSummary = aiSummaryColumnAvailable !== false;
-  const selectedColumns = getPaperWorkspaceSelect(includeSummary);
-  let response = await supabase.from("papers").select(selectedColumns).eq("id", paperId).maybeSingle();
-
-  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
-    aiSummaryColumnAvailable = false;
-    response = await supabase.from("papers").select(getPaperWorkspaceSelect(false)).eq("id", paperId).maybeSingle();
-  } else if (!response.error && includeSummary) {
-    aiSummaryColumnAvailable = true;
-  }
-
-  if (response.error || !response.data) {
-    return null;
-  }
-
-  const paperRow = response.data as unknown as Record<string, unknown>;
-  return {
-    ...paperRow,
-    ai_summary: includeSummary && "ai_summary" in paperRow ? (paperRow.ai_summary as string | null | undefined) ?? null : null
-  } as WorkspacePaperRow;
-}
-
-function getPaperWorkspaceSelect(includeSummary: boolean) {
-  const base =
-    "id, source, arxiv_id, original_filename, storage_path, title, abstract, pdf_url, page_count, full_text, starter_questions, annotation_style";
-  return includeSummary ? `${base}, ai_summary` : base;
-}
-
-async function getLinkedPaperForUser(paperId: string, userId: string) {
-  const supabase = await createSupabaseServerClient();
-  const { data: linkedPaper } = await supabase
-    .from("user_papers")
-    .select("paper:papers(id, source, arxiv_id, original_filename, storage_path, title, abstract, pdf_url)")
-    .eq("user_id", userId)
-    .eq("paper_id", paperId)
-    .maybeSingle();
-
-  return (linkedPaper as LinkedPaperRow | null)?.paper;
-}
-
-async function insertPaperRow(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  payload: IngestionPayload,
-  cachedPdfUrl: string
-) {
-  const includeSummary = aiSummaryColumnAvailable !== false;
-  let response = await admin
-    .from("papers")
-    .insert(buildPaperMutationPayload(payload, cachedPdfUrl, includeSummary))
-    .select("id")
-    .single();
-
-  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
-    aiSummaryColumnAvailable = false;
-    response = await admin
-      .from("papers")
-      .insert(buildPaperMutationPayload(payload, cachedPdfUrl, false))
-      .select("id")
-      .single();
-  } else if (!response.error && includeSummary) {
-    aiSummaryColumnAvailable = true;
-  }
-
-  return response;
-}
-
-async function updatePaperRow(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  paperId: string,
-  payload: IngestionPayload,
-  cachedPdfUrl: string
-) {
-  const includeSummary = aiSummaryColumnAvailable !== false;
-  let response = await admin
-    .from("papers")
-    .update(buildPaperMutationPayload(payload, cachedPdfUrl, includeSummary))
-    .eq("id", paperId);
-
-  if (response.error && includeSummary && isMissingAiSummaryColumnError(response.error)) {
-    aiSummaryColumnAvailable = false;
-    response = await admin.from("papers").update(buildPaperMutationPayload(payload, cachedPdfUrl, false)).eq("id", paperId);
-  } else if (!response.error && includeSummary) {
-    aiSummaryColumnAvailable = true;
-  }
-
-  return response;
-}
-
-async function updatePaperSummary(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  paperId: string,
-  summary: string
-) {
-  const includeSummary = aiSummaryColumnAvailable !== false;
-  if (!includeSummary) {
-    return { error: null };
-  }
-
-  const response = await admin.from("papers").update({ ai_summary: summary }).eq("id", paperId);
-
-  if (response.error && isMissingAiSummaryColumnError(response.error)) {
-    aiSummaryColumnAvailable = false;
-    return { error: null };
-  }
-
-  aiSummaryColumnAvailable = true;
-  return response;
-}
-
-async function insertAnnotations(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  paperId: string,
-  payload: IngestionPayload
-) {
-  if (payload.annotations.length === 0) {
-    throw new Error("Python ingestion completed without annotations.");
-  }
-
-  const { error } = await admin.from("annotations").insert(
-    payload.annotations.map((annotation) => ({
-      paper_id: paperId,
-      page_number: annotation.page_number,
-      type: annotation.type,
-      text_ref: annotation.text_ref,
-      note: annotation.note,
-      importance: annotation.importance,
-      bbox: annotation.bbox,
-      anchor: annotation.anchor ?? null
-    }))
-  );
-
-  if (error) {
-    throw new Error(error.message);
-  }
-}
-
-function buildPaperMutationPayload(payload: IngestionPayload, cachedPdfUrl: string, includeSummary: boolean) {
-  const basePayload = {
-    source: payload.source,
-    arxiv_id: payload.source === "arxiv" ? payload.arxivId : null,
-    original_filename: payload.source === "upload" ? payload.originalFilename : null,
-    storage_path: payload.source === "upload" ? payload.storagePath : null,
-    title: payload.title,
-    abstract: payload.abstract,
-    pdf_url: cachedPdfUrl,
-    page_count: payload.pageCount,
-    full_text: payload.fullText,
-    starter_questions: payload.starterQuestions,
-    annotation_style: payload.annotationStyle ?? "default"
-  };
-
-  return includeSummary
-    ? {
-        ...basePayload,
-        ai_summary: payload.summary || payload.abstract
-      }
-    : basePayload;
-}
-
-function isMissingAiSummaryColumnError(error: { message?: string; details?: string | null }) {
-  const haystack = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
-  return haystack.includes("ai_summary") && (haystack.includes("schema cache") || haystack.includes("column"));
 }

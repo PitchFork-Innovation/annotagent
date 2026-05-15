@@ -107,5 +107,4 @@ export type UploadInitResponse = {
   uploadId: string;
   storagePath: string;
   signedUploadUrl: string;
-  signedUploadToken: string;
 };
