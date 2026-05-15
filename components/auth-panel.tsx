@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { signIn } from "next-auth/react";
 import type { UserProfile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -13,7 +13,6 @@ type Props = {
 
 export function AuthPanel({ user, hasAuthError = false }: Props) {
   const router = useRouter();
-  const [supabase] = useState(() => createSupabaseBrowserClient());
   const [email, setEmail] = useState(user?.email ?? "");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -28,15 +27,12 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
     setNotice(null);
     setIsSubmitting(true);
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
+    const result = await signIn("credentials", { email, password, redirect: false });
 
     setIsSubmitting(false);
 
-    if (authError) {
-      setError(authError.message);
+    if (result?.error) {
+      setError("Invalid email or password.");
       return;
     }
 
@@ -48,24 +44,28 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
     setNotice(null);
     setIsSubmitting(true);
 
-    const { data, error: authError } = await supabase.auth.signUp({
-      email,
-      password
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
     });
 
+    if (!res.ok) {
+      const data = (await res.json()) as { error?: string };
+      setIsSubmitting(false);
+      setError(data.error ?? "Sign up failed.");
+      return;
+    }
+
+    const result = await signIn("credentials", { email, password, redirect: false });
     setIsSubmitting(false);
 
-    if (authError) {
-      setError(authError.message);
+    if (result?.error) {
+      setNotice(`Account created for ${email}. Please sign in.`);
       return;
     }
 
-    if (data.session) {
-      router.refresh();
-      return;
-    }
-
-    setNotice(`Account created for ${email}. Check your inbox if email confirmation is enabled.`);
+    router.refresh();
   }
 
   async function onResetPassword() {
@@ -73,18 +73,13 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
     setNotice(null);
     setIsSubmitting(true);
 
-    const redirectTo = `${window.location.origin}/auth/callback?next=/reset-password`;
-    const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo
+    await fetch("/api/auth/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
     });
 
     setIsSubmitting(false);
-
-    if (authError) {
-      setError(authError.message);
-      return;
-    }
-
     setNotice(`Reset link sent to ${email}.`);
   }
 
@@ -107,7 +102,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
             <span className="text-gold/50">›</span> PDF cached by arXiv ID
           </li>
           <li className="flex gap-2">
-            <span className="text-gold/50">›</span> Annotations persisted to Supabase
+            <span className="text-gold/50">›</span> Annotations persisted to your library
           </li>
           <li className="flex gap-2">
             <span className="text-gold/50">›</span> Paper library scoped to your account
@@ -203,7 +198,7 @@ export function AuthPanel({ user, hasAuthError = false }: Props) {
           <span className="text-gold/50">›</span> PDF cached by arXiv ID
         </li>
         <li className="flex gap-2">
-          <span className="text-gold/50">›</span> Annotations persisted to Supabase
+          <span className="text-gold/50">›</span> Annotations persisted to your library
         </li>
         <li className="flex gap-2">
           <span className="text-gold/50">›</span> Paper library scoped to your account
